@@ -40,13 +40,17 @@ jobs:
         run: npm --prefix mobile audit --omit=dev
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: table
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            aquasec/trivy:0.56.1 fs \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --skip-dirs /repo/node_modules \
+            --skip-dirs /repo/dist \
+            --skip-dirs /repo/mobile/node_modules \
+            --skip-dirs /repo/mobile/dist \
+            /repo
 
       - name: Gitleaks scan
         uses: gitleaks/gitleaks-action@v2
