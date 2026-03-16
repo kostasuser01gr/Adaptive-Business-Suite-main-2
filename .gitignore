@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+.expo
+.expo-shared
+.git.embedded-backup
+server/public
+vite.config.ts.*
+*.tar.gz
