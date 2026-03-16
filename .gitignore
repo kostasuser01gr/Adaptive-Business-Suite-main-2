@@ -6,6 +6,7 @@ dist
 .nyc_output
 coverage
 .git.embedded-backup
+nexus-os/
 server/public
 vite.config.ts.*
 *.tar.gz

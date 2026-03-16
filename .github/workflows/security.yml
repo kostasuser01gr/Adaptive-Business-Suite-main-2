@@ -1,6 +1,7 @@
 name: Security
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -50,6 +51,7 @@ jobs:
             --skip-dirs /repo/dist \
             --skip-dirs /repo/mobile/node_modules \
             --skip-dirs /repo/mobile/dist \
+            --skip-dirs /repo/nexus-os \
             /repo
 
       - name: Gitleaks scan

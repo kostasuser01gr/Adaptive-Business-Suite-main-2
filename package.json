@@ -20,7 +20,7 @@
     "doctor:mobile": "node script/retry-mobile-doctor.mjs",
     "validate:mobile": "npm --prefix mobile run typecheck && npm run doctor:mobile && sh -lc 'cd mobile && npx expo export --platform all'",
     "security:audit": "npm audit --omit=dev && npm --prefix mobile audit --omit=dev",
-    "security:scan": "trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs node_modules --skip-dirs dist --skip-dirs mobile/node_modules --skip-dirs mobile/dist . && gitleaks git --redact",
+    "security:scan": "trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs node_modules --skip-dirs dist --skip-dirs mobile/node_modules --skip-dirs mobile/dist --skip-dirs nexus-os . && gitleaks git --redact",
     "validate": "npm run lint && npm test && npm run build && npm run validate:mobile && npm run security:audit"
   },
   "dependencies": {
