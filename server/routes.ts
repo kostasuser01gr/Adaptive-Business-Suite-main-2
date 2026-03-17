@@ -24,6 +24,12 @@ function getRouteParam(req: Request, key: string): string {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function toDateOrNull(value: unknown): Date | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return value instanceof Date ? value : new Date(String(value));
+}
+
 type UserMode = 'rental' | 'personal' | 'professional' | 'custom';
 
 const defaultModules: Record<UserMode, { type: string; title: string; w: string; h: string; data?: any }[]> = {
@@ -321,7 +327,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getBookings(req.session.userId!));
   });
   app.post("/api/bookings", requireAuth, async (req: Request, res: Response) => {
-    const b = await storage.createBooking({ ...req.body, userId: req.session.userId! });
+    const b = await storage.createBooking({
+      ...req.body,
+      userId: req.session.userId!,
+      startDate: toDateOrNull(req.body.startDate),
+      endDate: toDateOrNull(req.body.endDate),
+    });
     if (req.body.vehicleId) {
       await storage.updateVehicle(req.body.vehicleId, { status: 'rented' });
     }
@@ -329,7 +340,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.patch("/api/bookings/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    const b = await storage.updateBooking(id, req.body);
+    const b = await storage.updateBooking(id, {
+      ...req.body,
+      startDate: toDateOrNull(req.body.startDate),
+      endDate: toDateOrNull(req.body.endDate),
+    });
     if (req.body.status === 'completed' && b?.vehicleId) {
       await storage.updateVehicle(b.vehicleId, { status: 'available' });
     }
@@ -341,11 +356,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getMaintenanceRecords(req.session.userId!));
   });
   app.post("/api/maintenance", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.createMaintenance({ ...req.body, userId: req.session.userId! }));
+    return res.json(await storage.createMaintenance({
+      ...req.body,
+      userId: req.session.userId!,
+      scheduledDate: toDateOrNull(req.body.scheduledDate),
+      completedDate: toDateOrNull(req.body.completedDate),
+    }));
   });
   app.patch("/api/maintenance/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    return res.json(await storage.updateMaintenance(id, req.body));
+    return res.json(await storage.updateMaintenance(id, {
+      ...req.body,
+      scheduledDate: toDateOrNull(req.body.scheduledDate),
+      completedDate: toDateOrNull(req.body.completedDate),
+    }));
   });
 
   // ── Tasks ──
