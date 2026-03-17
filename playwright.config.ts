@@ -29,7 +29,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
     env: {
-      NODE_ENV: "production",
+      NODE_ENV: "test",
       PORT: "5000",
       DATABASE_URL: process.env.DATABASE_URL ?? "",
       SESSION_SECRET: process.env.SESSION_SECRET ?? "e2e-test-only-secret",
