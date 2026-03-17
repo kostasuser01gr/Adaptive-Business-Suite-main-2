@@ -6,6 +6,12 @@ import { createServer } from "http";
 const app = express();
 const httpServer = createServer(app);
 
+// Trust Railway/reverse-proxy X-Forwarded-* headers so req.secure is accurate
+// in production; required for secure session cookies behind HTTPS proxies.
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;

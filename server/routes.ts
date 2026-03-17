@@ -3,10 +3,20 @@ import { createServer, type Server } from "http";
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import session from "express-session";
+import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { insertUserSchema } from "@shared/schema";
 import MemoryStore from "memorystore";
 import { buildNexusUltraPayload } from "./nexus-ultra";
+
+// 20 auth attempts per IP per 15 minutes; in-process window store is fine for single-instance
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many requests, please try again later." },
+});
 
 const scryptAsync = promisify(scrypt);
 
@@ -156,11 +166,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     resave: false,
     saveUninitialized: false,
     store: new SessionStore({ checkPeriod: 86400000 }),
-    cookie: { maxAge: 30 * 24 * 60 * 60 * 1000 }
+    cookie: {
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    }
   }));
 
   // ── Auth ──
-  app.post("/api/auth/register", async (req: Request, res: Response) => {
+  app.post("/api/auth/register", authLimiter, async (req: Request, res: Response) => {
     try {
       const body = insertUserSchema.parse(req.body);
       const existing = await storage.getUserByUsername(body.username);
@@ -185,7 +200,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/auth/login", async (req: Request, res: Response) => {
+  app.post("/api/auth/login", authLimiter, async (req: Request, res: Response) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ message: "Username and password required" });
     const user = await storage.getUserByUsername(username);
