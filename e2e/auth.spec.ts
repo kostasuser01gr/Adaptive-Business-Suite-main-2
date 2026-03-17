@@ -27,10 +27,16 @@ test.describe("Authentication flows", () => {
     await page.getByTestId("input-display-name").fill("E2E User");
     await page.getByTestId("input-username").fill(username);
     await page.getByTestId("input-password").fill("TestPass123!");
-    await page.getByTestId("button-auth-submit").click();
 
-    // Should land on dashboard
-    await expect(page).toHaveURL("/");
+    // Wait for the register API response and the submit click simultaneously
+    const [registerRes] = await Promise.all([
+      page.waitForResponse(r => r.url().includes("/api/auth/register")),
+      page.getByTestId("button-auth-submit").click(),
+    ]);
+    expect(registerRes.status()).toBe(200);
+
+    // Should land on dashboard — allow enough time for React Query to refetch /api/auth/me
+    await expect(page).toHaveURL("/", { timeout: 10000 });
     await expect(page.getByTestId("text-dashboard-title")).toBeVisible();
   });
 
@@ -50,9 +56,14 @@ test.describe("Authentication flows", () => {
 
     await page.getByTestId("input-username").fill(username);
     await page.getByTestId("input-password").fill("TestPass123!");
-    await page.getByTestId("button-auth-submit").click();
 
-    await expect(page).toHaveURL("/");
+    const [loginRes] = await Promise.all([
+      page.waitForResponse(r => r.url().includes("/api/auth/login")),
+      page.getByTestId("button-auth-submit").click(),
+    ]);
+    expect(loginRes.status()).toBe(200);
+
+    await expect(page).toHaveURL("/", { timeout: 10000 });
     await expect(page.getByTestId("text-dashboard-title")).toBeVisible();
   });
 
@@ -74,13 +85,19 @@ test.describe("Authentication flows", () => {
 
   test("logout clears session and redirects to /auth", async ({ page }) => {
     const username = u();
-    await page.request.post("/api/auth/register", {
+    // Register and verify session is working before navigating
+    const regRes = await page.request.post("/api/auth/register", {
       data: { username, password: "TestPass123!", displayName: "E2E" },
     });
+    expect(regRes.ok()).toBeTruthy();
 
-    // Navigate directly — session cookie set by register
+    // Confirm the session is recognised before navigating
+    const meRes = await page.request.get("/api/auth/me");
+    expect(meRes.ok()).toBeTruthy();
+
+    // Navigate directly — session cookie shared with browser context
     await page.goto("/");
-    await expect(page.getByTestId("text-dashboard-title")).toBeVisible();
+    await expect(page.getByTestId("text-dashboard-title")).toBeVisible({ timeout: 10000 });
 
     // Logout via API and re-navigate
     await page.request.post("/api/auth/logout");
@@ -105,23 +122,27 @@ test.describe("Authentication flows", () => {
     await expect(page.getByTestId("text-auth-error")).toBeVisible();
   });
 
-  test("session cookie has httpOnly and sameSite flags", async ({ request }) => {
+  test("session cookie has httpOnly and sameSite flags", async ({ page }) => {
     const username = u();
-    const res = await request.post("/api/auth/register", {
+    // Register via page.request and check that the session cookie is in the
+    // browser's cookie jar with the expected security attributes.
+    const res = await page.request.post("/api/auth/register", {
       data: { username, password: "TestPass123!", displayName: "E2E" },
     });
     expect(res.ok()).toBeTruthy();
 
-    const setCookie = res.headers()["set-cookie"] ?? "";
-    // httpOnly must be present
-    expect(setCookie.toLowerCase()).toContain("httponly");
-    // samesite=lax must be present
-    expect(setCookie.toLowerCase()).toContain("samesite=lax");
+    // Playwright stores Set-Cookie into the browser context's jar — inspect it there
+    const cookies = await page.context().cookies("http://localhost:5000");
+    const sessionCookie = cookies.find(c => c.name === "connect.sid");
+    expect(sessionCookie, "session cookie must exist").toBeTruthy();
+    expect(sessionCookie?.httpOnly).toBe(true);
+    // SameSite is stored as "Lax", "Strict", or "None" in Playwright's cookie model
+    expect(sessionCookie?.sameSite).toBe("Lax");
   });
 
   test("auth rate limiter returns 429 after threshold", async ({ request }) => {
-    // Fire 21 login attempts with a non-existent user; the 21st (beyond max=20)
-    // must be rejected with 429 Too Many Requests.
+    // Fire 21 login attempts with a non-existent user from a fresh isolated
+    // request context (separate IP-key bucket from page tests).
     const bogus = u();
     let lastStatus = 0;
     for (let i = 0; i < 21; i++) {

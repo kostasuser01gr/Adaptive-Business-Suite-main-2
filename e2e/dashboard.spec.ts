@@ -2,12 +2,17 @@ import { test, expect } from "@playwright/test";
 
 const u = () => `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
+// Register via API and verify the session is active before returning.
+// This ensures the browser context has a valid session cookie for page.goto().
 async function registerAndLogin(page: import("@playwright/test").Page) {
   const username = u();
   const res = await page.request.post("/api/auth/register", {
     data: { username, password: "TestPass123!", displayName: "E2E" },
   });
   expect(res.ok()).toBeTruthy();
+  // Confirm the session cookie is recognised before any navigation
+  const meRes = await page.request.get("/api/auth/me");
+  expect(meRes.ok()).toBeTruthy();
   return username;
 }
 
@@ -16,7 +21,7 @@ test.describe("Dashboard", () => {
     await registerAndLogin(page);
     await page.goto("/");
 
-    await expect(page.getByTestId("text-dashboard-title")).toBeVisible();
+    await expect(page.getByTestId("text-dashboard-title")).toBeVisible({ timeout: 10000 });
     // Default mode is 'rental', verify the title reflects that
     await expect(page.getByTestId("text-dashboard-title")).toContainText("Rental");
   });
@@ -25,6 +30,7 @@ test.describe("Dashboard", () => {
     await registerAndLogin(page);
     await page.goto("/");
 
+    await expect(page.getByTestId("text-dashboard-title")).toBeVisible({ timeout: 10000 });
     await page.getByTestId("button-open-ai").click();
     // Chat panel should appear — look for the chat input or assistant label
     await expect(page.getByRole("textbox").or(page.getByPlaceholder(/message|ask|type/i))).toBeVisible({ timeout: 5000 }).catch(() => {
@@ -47,6 +53,7 @@ test.describe("Dashboard", () => {
 
   test("api /api/stats returns stats for authenticated user", async ({ page }) => {
     await registerAndLogin(page);
+    // /api/stats is called via page.request which shares the session cookie
     const res = await page.request.get("/api/stats");
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
