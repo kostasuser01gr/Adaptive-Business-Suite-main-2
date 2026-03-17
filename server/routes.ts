@@ -1,10 +1,29 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import session from "express-session";
 import { storage } from "./storage";
 import { insertUserSchema } from "@shared/schema";
 import MemoryStore from "memorystore";
 import { buildNexusUltraPayload } from "./nexus-ultra";
+
+const scryptAsync = promisify(scrypt);
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString("hex");
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  return `${buf.toString("hex")}.${salt}`;
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [hashed, salt] = stored.split(".");
+  if (!hashed || !salt) return false;
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  const storedBuf = Buffer.from(hashed, "hex");
+  if (buf.length !== storedBuf.length) return false;
+  return timingSafeEqual(buf, storedBuf);
+}
 
 const SessionStore = MemoryStore(session);
 
@@ -22,6 +41,12 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 function getRouteParam(req: Request, key: string): string {
   const value = req.params[key];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function toDateOrNull(value: unknown): Date | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return value instanceof Date ? value : new Date(String(value));
 }
 
 type UserMode = 'rental' | 'personal' | 'professional' | 'custom';
@@ -125,7 +150,7 @@ function processAssistantCommand(command: string, context: { mode: string; modul
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use(session({
-    secret: process.env.SESSION_SECRET || "nexus-os-secret-key-2024",
+    secret: process.env.SESSION_SECRET ?? (() => { if (process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET must be set in production"); return "nexus-dev-only-secret"; })(),
     resave: false,
     saveUninitialized: false,
     store: new SessionStore({ checkPeriod: 86400000 }),
@@ -138,7 +163,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const body = insertUserSchema.parse(req.body);
       const existing = await storage.getUserByUsername(body.username);
       if (existing) return res.status(400).json({ message: "Username already taken" });
-      const user = await storage.createUser(body);
+      const user = await storage.createUser({ ...body, password: await hashPassword(body.password) });
       req.session.userId = user.id;
 
       // Create default workspace
@@ -162,7 +187,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ message: "Username and password required" });
     const user = await storage.getUserByUsername(username);
-    if (!user || user.password !== password) return res.status(401).json({ message: "Invalid credentials" });
+    if (!user || !(await verifyPassword(password, user.password))) return res.status(401).json({ message: "Invalid credentials" });
     req.session.userId = user.id;
     const { password: _, ...safe } = user;
     return res.json(safe);
@@ -321,7 +346,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getBookings(req.session.userId!));
   });
   app.post("/api/bookings", requireAuth, async (req: Request, res: Response) => {
-    const b = await storage.createBooking({ ...req.body, userId: req.session.userId! });
+    const b = await storage.createBooking({
+      ...req.body,
+      userId: req.session.userId!,
+      startDate: toDateOrNull(req.body.startDate),
+      endDate: toDateOrNull(req.body.endDate),
+    });
     if (req.body.vehicleId) {
       await storage.updateVehicle(req.body.vehicleId, { status: 'rented' });
     }
@@ -329,7 +359,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.patch("/api/bookings/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    const b = await storage.updateBooking(id, req.body);
+    const b = await storage.updateBooking(id, {
+      ...req.body,
+      startDate: toDateOrNull(req.body.startDate),
+      endDate: toDateOrNull(req.body.endDate),
+    });
     if (req.body.status === 'completed' && b?.vehicleId) {
       await storage.updateVehicle(b.vehicleId, { status: 'available' });
     }
@@ -341,11 +375,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getMaintenanceRecords(req.session.userId!));
   });
   app.post("/api/maintenance", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.createMaintenance({ ...req.body, userId: req.session.userId! }));
+    return res.json(await storage.createMaintenance({
+      ...req.body,
+      userId: req.session.userId!,
+      scheduledDate: toDateOrNull(req.body.scheduledDate),
+      completedDate: toDateOrNull(req.body.completedDate),
+    }));
   });
   app.patch("/api/maintenance/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    return res.json(await storage.updateMaintenance(id, req.body));
+    return res.json(await storage.updateMaintenance(id, {
+      ...req.body,
+      scheduledDate: toDateOrNull(req.body.scheduledDate),
+      completedDate: toDateOrNull(req.body.completedDate),
+    }));
   });
 
   // ── Tasks ──
