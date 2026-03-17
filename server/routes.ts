@@ -46,7 +46,9 @@ function getRouteParam(req: Request, key: string): string {
 function toDateOrNull(value: unknown): Date | null | undefined {
   if (value === undefined) return undefined;
   if (value === null || value === "") return null;
-  return value instanceof Date ? value : new Date(String(value));
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (isNaN(d.getTime())) throw Object.assign(new Error(`Invalid date value: ${value}`), { status: 400 });
+  return d;
 }
 
 type UserMode = 'rental' | 'personal' | 'professional' | 'custom';

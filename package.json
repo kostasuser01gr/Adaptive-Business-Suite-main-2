@@ -21,6 +21,8 @@
     "validate:mobile": "npm --prefix mobile run typecheck && npm run doctor:mobile && sh -lc 'cd mobile && npx expo export --platform all'",
     "security:audit": "npm audit --omit=dev && npm --prefix mobile audit --omit=dev",
     "security:scan": "trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs node_modules --skip-dirs dist --skip-dirs mobile/node_modules --skip-dirs mobile/dist --skip-dirs nexus-os . && gitleaks git --redact",
+    "test:integration": "tsx --test test/storage.integration.test.ts",
+    "test:e2e": "playwright test",
     "validate": "npm run lint && npm test && npm run build && npm run validate:mobile && npm run security:audit"
   },
   "dependencies": {
@@ -89,6 +91,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@replit/vite-plugin-cartographer": "^0.4.10",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.4",
