@@ -104,4 +104,32 @@ test.describe("Authentication flows", () => {
 
     await expect(page.getByTestId("text-auth-error")).toBeVisible();
   });
+
+  test("session cookie has httpOnly and sameSite flags", async ({ request }) => {
+    const username = u();
+    const res = await request.post("/api/auth/register", {
+      data: { username, password: "TestPass123!", displayName: "E2E" },
+    });
+    expect(res.ok()).toBeTruthy();
+
+    const setCookie = res.headers()["set-cookie"] ?? "";
+    // httpOnly must be present
+    expect(setCookie.toLowerCase()).toContain("httponly");
+    // samesite=lax must be present
+    expect(setCookie.toLowerCase()).toContain("samesite=lax");
+  });
+
+  test("auth rate limiter returns 429 after threshold", async ({ request }) => {
+    // Fire 21 login attempts with a non-existent user; the 21st (beyond max=20)
+    // must be rejected with 429 Too Many Requests.
+    const bogus = u();
+    let lastStatus = 0;
+    for (let i = 0; i < 21; i++) {
+      const r = await request.post("/api/auth/login", {
+        data: { username: bogus, password: "WrongPass1!" },
+      });
+      lastStatus = r.status();
+    }
+    expect(lastStatus).toBe(429);
+  });
 });
