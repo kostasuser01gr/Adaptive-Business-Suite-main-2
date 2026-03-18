@@ -11,3 +11,21 @@ const pool = new pg.Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+/**
+ * Creates a scoped transaction that sets the Postgres session variable 
+ * for Row Level Security (RLS).
+ */
+export async function withTenant(userId: string, callback: (tx: any) => Promise<any>) {
+  return pool.connect().then(async (client) => {
+    try {
+      await client.query(`SET app.current_user_id = '${userId}'`);
+      const tx = drizzle(client, { schema });
+      return await callback(tx);
+    } finally {
+      // Clear the session variable before releasing the client back to the pool
+      await client.query(`RESET app.current_user_id`);
+      client.release();
+    }
+  });
+}

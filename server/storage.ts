@@ -1,8 +1,9 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, gt } from "drizzle-orm";
 import { db } from "./db";
 import {
   users, modules, chatMessages, vehicles, customers, bookings,
   maintenanceRecords, tasks, notes, actionHistory, assistantMemory, workspaces,
+  notifications, automations, inspections,
   type User, type InsertUser,
   type Module, type InsertModule,
   type ChatMessage, type InsertChatMessage,
@@ -15,7 +16,24 @@ import {
   type ActionHistory, type InsertAction,
   type AssistantMemoryRecord, type InsertMemory,
   type Workspace, type InsertWorkspace,
+  type Notification, type InsertNotification,
+  type Automation, type InsertAutomation,
+  type Inspection, type InsertInspection,
 } from "@shared/schema";
+
+export interface SyncPayload {
+  vehicles: Vehicle[];
+  customers: Customer[];
+  bookings: Booking[];
+  maintenance: MaintenanceRecord[];
+  tasks: Task[];
+  notes: Note[];
+  modules: Module[];
+  chatMessages: ChatMessage[];
+  notifications: Notification[];
+  inspections: Inspection[];
+  lastSyncTimestamp: string;
+}
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -74,9 +92,30 @@ export interface IStorage {
 
   getMemory(userId: string): Promise<AssistantMemoryRecord[]>;
   setMemory(userId: string, key: string, value: string, category?: string): Promise<AssistantMemoryRecord>;
+
+  getNotifications(userId: string): Promise<Notification[]>;
+  createNotification(n: InsertNotification): Promise<Notification>;
+  markNotificationRead(id: string): Promise<void>;
+  markAllNotificationsRead(userId: string): Promise<void>;
+
+  getAutomations(userId: string): Promise<Automation[]>;
+  createAutomation(a: InsertAutomation): Promise<Automation>;
+  updateAutomation(id: string, updates: Partial<InsertAutomation>): Promise<Automation | undefined>;
+
+  getInspections(userId: string): Promise<Inspection[]>;
+  getInspection(id: string): Promise<Inspection | undefined>;
+  createInspection(i: InsertInspection): Promise<Inspection>;
+  updateInspection(id: string, updates: Partial<InsertInspection>): Promise<Inspection | undefined>;
+
+  getSyncData(userId: string, since: Date): Promise<SyncPayload>;
 }
 
 export class DatabaseStorage implements IStorage {
+  private async isPrivileged(userId: string): Promise<boolean> {
+    const user = await this.getUser(userId);
+    return user?.role === 'admin' || user?.role === 'operator';
+  }
+
   async getUser(id: string) {
     const [u] = await db.select().from(users).where(eq(users.id, id));
     return u;
@@ -133,10 +172,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getVehicles(userId: string) {
-    return db.select().from(vehicles).where(eq(vehicles.userId, userId));
+    const res = await db.select().from(vehicles).where(eq(vehicles.userId, userId));
+    const privileged = await this.isPrivileged(userId);
+    if (!privileged) {
+      return res.map(({ dailyRate, ...rest }) => ({ ...rest, dailyRate: null } as any));
+    }
+    return res;
   }
   async getVehicle(id: string) {
     const [v] = await db.select().from(vehicles).where(eq(vehicles.id, id));
+    if (v && !(await this.isPrivileged(v.userId))) {
+      return { ...v, dailyRate: null } as any;
+    }
     return v;
   }
   async createVehicle(v: InsertVehicle) {
@@ -171,10 +218,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBookings(userId: string) {
-    return db.select().from(bookings).where(eq(bookings.userId, userId)).orderBy(desc(bookings.createdAt));
+    const res = await db.select().from(bookings).where(eq(bookings.userId, userId)).orderBy(desc(bookings.createdAt));
+    const privileged = await this.isPrivileged(userId);
+    if (!privileged) {
+      return res.map(({ totalAmount, deposit, ...rest }) => ({ ...rest, totalAmount: null, deposit: null } as any));
+    }
+    return res;
   }
   async getBooking(id: string) {
     const [b] = await db.select().from(bookings).where(eq(bookings.id, id));
+    if (b && !(await this.isPrivileged(b.userId))) {
+      return { ...b, totalAmount: null, deposit: null } as any;
+    }
     return b;
   }
   async createBooking(b: InsertBooking) {
@@ -257,6 +312,81 @@ export class DatabaseStorage implements IStorage {
     }
     const [created] = await db.insert(assistantMemory).values({ userId, key, value, category }).returning();
     return created;
+  }
+
+  async getNotifications(userId: string) {
+    return db.select().from(notifications).where(eq(notifications.userId, userId)).orderBy(desc(notifications.createdAt));
+  }
+  async createNotification(n: InsertNotification) {
+    const [created] = await db.insert(notifications).values(n).returning();
+    return created;
+  }
+  async markNotificationRead(id: string) {
+    await db.update(notifications).set({ read: true }).where(eq(notifications.id, id));
+  }
+  async markAllNotificationsRead(userId: string) {
+    await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+  }
+
+  async getAutomations(userId: string) {
+    return db.select().from(automations).where(eq(automations.userId, userId));
+  }
+  async createAutomation(a: InsertAutomation) {
+    const [created] = await db.insert(automations).values(a).returning();
+    return created;
+  }
+  async updateAutomation(id: string, updates: Partial<InsertAutomation>) {
+    const [u] = await db.update(automations).set(updates).where(eq(automations.id, id)).returning();
+    return u;
+  }
+
+  async getInspections(userId: string) {
+    return db.select().from(inspections).where(eq(inspections.userId, userId)).orderBy(desc(inspections.createdAt));
+  }
+  async getInspection(id: string) {
+    const [i] = await db.select().from(inspections).where(eq(inspections.id, id));
+    return i;
+  }
+  async createInspection(i: InsertInspection) {
+    const [created] = await db.insert(inspections).values(i).returning();
+    return created;
+  }
+  async updateInspection(id: string, updates: Partial<InsertInspection>) {
+    const [u] = await db.update(inspections).set(updates).where(eq(inspections.id, id)).returning();
+    return u;
+  }
+
+  async getSyncData(userId: string, since: Date): Promise<SyncPayload> {
+    const [
+      vehicleSync, customerSync, bookingSync, maintenanceSync,
+      taskSync, noteSync, moduleSync, chatSync, notificationSync,
+      inspectionSync
+    ] = await Promise.all([
+      this.getVehicles(userId), // Using local methods to respect RBAC
+      db.select().from(customers).where(and(eq(customers.userId, userId), gt(customers.updatedAt, since))),
+      this.getBookings(userId), // Using local methods to respect RBAC
+      db.select().from(maintenanceRecords).where(and(eq(maintenanceRecords.userId, userId), gt(maintenanceRecords.updatedAt, since))),
+      db.select().from(tasks).where(and(eq(tasks.userId, userId), gt(tasks.updatedAt, since))),
+      db.select().from(notes).where(and(eq(notes.userId, userId), gt(notes.updatedAt, since))),
+      db.select().from(modules).where(and(eq(modules.userId, userId), gt(modules.updatedAt, since))),
+      db.select().from(chatMessages).where(and(eq(chatMessages.userId, userId), gt(chatMessages.updatedAt, since))),
+      db.select().from(notifications).where(and(eq(notifications.userId, userId), gt(notifications.updatedAt, since))),
+      db.select().from(inspections).where(and(eq(inspections.userId, userId), gt(inspections.updatedAt, since))),
+    ]);
+
+    return {
+      vehicles: vehicleSync,
+      customers: customerSync,
+      bookings: bookingSync,
+      maintenance: maintenanceSync,
+      tasks: taskSync,
+      notes: noteSync,
+      modules: moduleSync,
+      chatMessages: chatSync,
+      notifications: notificationSync,
+      inspections: inspectionSync,
+      lastSyncTimestamp: new Date().toISOString(),
+    };
   }
 }
 

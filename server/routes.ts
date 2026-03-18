@@ -5,13 +5,15 @@ import { promisify } from "node:util";
 import session from "express-session";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
-import { insertUserSchema } from "@shared/schema";
+import { insertUserSchema, insertVehicleSchema, insertCustomerSchema, insertBookingSchema, insertTaskSchema, insertNoteSchema, insertAutomationSchema, insertInspectionSchema } from "@shared/schema";
 import MemoryStore from "memorystore";
 import { buildNexusUltraPayload } from "./nexus-ultra";
 import { processMessage, type AssistantContext } from "./model/index.js";
+import { emitEvent, EventTypes } from "./events";
+import { ontologies, defaultOntology } from "@shared/ontologies";
+import { calculateYield } from "./services/yield";
+import { processInspection } from "./services/vision";
 
-// Separate limiters so the register counter and the login counter are independent.
-// Both: 20 attempts per IP per 15-minute window.
 const makeLimiter = () => rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -66,36 +68,27 @@ function toDateOrNull(value: unknown): Date | null | undefined {
 }
 
 type UserMode = 'rental' | 'personal' | 'professional' | 'custom';
-type DefaultModuleSpec = { type: string; title: string; w: string; h: string; data?: any };
 
-const defaultModules: Record<UserMode, DefaultModuleSpec[]> = {
+const defaultModulesByOntology: Record<string, any[]> = {
   rental: [
     { type: 'daily-overview', title: 'Daily Overview', w: '4', h: '1' },
     { type: 'kpi', title: 'Active Rentals', w: '1', h: '1', data: { value: '0', label: 'Vehicles out', icon: 'car', color: 'blue' } },
-    { type: 'kpi', title: 'Revenue (MTD)', w: '1', h: '1', data: { value: '€0', label: 'This month', icon: 'euro', color: 'green' } },
-    { type: 'kpi', title: 'Fleet Utilization', w: '1', h: '1', data: { value: '0%', label: 'Vehicles in use', icon: 'gauge', color: 'purple' } },
-    { type: 'kpi', title: 'Pending Tasks', w: '1', h: '1', data: { value: '0', label: 'Action needed', icon: 'tasks', color: 'orange' } },
     { type: 'fleet', title: 'Fleet Status', w: '2', h: '2' },
     { type: 'bookings', title: 'Recent Bookings', w: '2', h: '2' },
-    { type: 'quick-actions', title: 'Quick Actions', w: '2', h: '1' },
     { type: 'tasks', title: 'Priority Tasks', w: '2', h: '1' },
   ],
   personal: [
-    { type: 'daily-overview', title: 'Daily Overview', w: '4', h: '1' },
+    { type: 'daily-overview', title: 'Personal Overview', w: '4', h: '1' },
     { type: 'notes', title: 'Quick Notes', w: '2', h: '2' },
     { type: 'tasks', title: 'To-Do List', w: '2', h: '2' },
     { type: 'kpi', title: 'Budget', w: '1', h: '1', data: { value: '€0', label: 'Monthly', icon: 'wallet', color: 'green' } },
-    { type: 'kpi', title: 'Habits', w: '1', h: '1', data: { value: '0/5', label: 'Today', icon: 'check', color: 'blue' } },
   ],
   professional: [
-    { type: 'daily-overview', title: 'Daily Overview', w: '4', h: '1' },
+    { type: 'daily-overview', title: 'Work Dashboard', w: '4', h: '1' },
     { type: 'tasks', title: 'Priority Tasks', w: '2', h: '2' },
-    { type: 'kpi', title: 'Active Projects', w: '1', h: '1', data: { value: '0', label: 'In progress', icon: 'briefcase', color: 'blue' } },
-    { type: 'kpi', title: 'Contacts', w: '1', h: '1', data: { value: '0', label: 'Total CRM', icon: 'users', color: 'purple' } },
-    { type: 'notes', title: 'Meeting Notes', w: '2', h: '2' },
-    { type: 'quick-actions', title: 'Quick Actions', w: '2', h: '1' },
+    { type: 'kpi', title: 'CRM Status', w: '1', h: '1', data: { value: '0', label: 'Total CRM', icon: 'users', color: 'purple' } },
+    { type: 'notes', title: 'Knowledge Base', w: '2', h: '2' },
   ],
-  custom: [],
 };
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -108,11 +101,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       maxAge: 30 * 24 * 60 * 60 * 1000,
       httpOnly: true,
       sameSite: "lax",
-      // SESSION_COOKIE_SECURE=false lets the E2E test server (plain HTTP, compiled
-      // bundle) opt out of the Secure flag.  In real production the variable is
-      // absent so the cookie is always Secure.  NOTE: esbuild defines
-      // process.env.NODE_ENV="production" at build time, so we cannot rely on
-      // NODE_ENV for a runtime override in the compiled bundle.
       secure: process.env.SESSION_COOKIE_SECURE !== "false",
     }
   }));
@@ -125,17 +113,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (existing) return res.status(400).json({ message: "Username already taken" });
       const user = await storage.createUser({ ...body, password: await hashPassword(body.password) });
       req.session.userId = user.id;
-
-      // Create default workspace
-      await storage.createWorkspace({ name: `${user.displayName || user.username}'s Workspace`, ownerId: user.id, type: 'rental', settings: null, modelConfig: null });
-
-      // Seed default modules
-      for (const m of defaultModules['rental']) {
+      
+      const ontologyId = user.mode || 'rental';
+      await storage.createWorkspace({ name: `${user.displayName || user.username}'s Workspace`, ownerId: user.id, type: ontologyId, activeOntology: ontologyId, settings: null, modelConfig: null });
+      
+      const seedModules = defaultModulesByOntology[ontologyId] || defaultModulesByOntology.rental;
+      for (const m of seedModules) {
         await storage.createModule({ userId: user.id, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
       }
-      await storage.createChatMessage({ userId: user.id, role: 'assistant', content: 'Welcome to Nexus OS! I am your adaptive workspace assistant.\n\nI can help you:\n• Add or remove dashboard modules\n• Switch between Rental, Personal, and Professional modes\n• Customize your workflow\n• Track your fleet, bookings, customers, and more\n\nWhat would you like to set up first?', actions: ['Add Fleet Overview', 'Add Bookings', 'Switch to Personal', 'Add Tasks'], metadata: null, workspaceId: null });
-      await storage.setMemory(user.id, 'onboarding_complete', 'false', 'system');
-
+      
+      await storage.createChatMessage({ userId: user.id, role: 'assistant', content: 'Welcome to Nexus OS! I am your adaptive workspace assistant.', actions: ['Setup my dashboard', 'Explain ontologies'], metadata: null, workspaceId: null });
       const { password, ...safe } = user;
       return res.json(safe);
     } catch (e: any) {
@@ -169,16 +156,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── User Settings ──
   app.patch("/api/user/mode", requireAuth, async (req: Request, res: Response) => {
     const { mode } = req.body;
-    if (!['rental', 'personal', 'professional', 'custom'].includes(mode)) return res.status(400).json({ message: "Invalid mode" });
+    if (!ontologies[mode]) return res.status(400).json({ message: "Invalid ontology" });
     const userId = req.session.userId!;
     await storage.updateUser(userId, { mode } as any);
     await storage.deleteAllModulesByUser(userId);
     const created = [];
-    for (const m of defaultModules[mode as UserMode]) {
+    const seedModules = defaultModulesByOntology[mode] || defaultModulesByOntology.rental;
+    for (const m of seedModules) {
       const c = await storage.createModule({ userId, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
       created.push(c);
     }
-    await storage.createAction({ userId, actionType: 'mode_switch', description: `Switched to ${mode} mode`, entityType: 'user', entityId: userId, previousState: null, newState: { mode }, status: 'applied' });
+    emitEvent(userId, null, EventTypes.ENTITY_UPDATED, { entityType: 'user', entityId: userId, data: { mode } });
     const user = await storage.getUser(userId);
     return res.json({ user, modules: created });
   });
@@ -187,6 +175,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userId = req.session.userId!;
     const user = await storage.updateUser(userId, { preferences: req.body } as any);
     return res.json(user);
+  });
+
+  // ── Sync ──
+  app.get("/api/sync", requireAuth, async (req: Request, res: Response) => {
+    const userId = req.session.userId!;
+    const sinceParam = req.query.since as string;
+    const since = sinceParam ? new Date(sinceParam) : new Date(0);
+    if (isNaN(since.getTime())) return res.status(400).json({ message: "Invalid since timestamp" });
+    const data = await storage.getSyncData(userId, since);
+    return res.json(data);
   });
 
   // ── Modules ──
@@ -223,43 +221,137 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/chat", requireAuth, async (req: Request, res: Response) => {
     const userId = req.session.userId!;
-    const { content } = req.body;
+    const { content, source = 'text' } = req.body;
     if (!content) return res.status(400).json({ message: "Content required" });
+    if (typeof content !== 'string' || content.length > 4000)
+      return res.status(400).json({ message: "Message too long (max 4000 characters)" });
 
-    await storage.createChatMessage({ userId, role: 'user', content, actions: null, metadata: null, workspaceId: null });
+    await storage.createChatMessage({ userId, role: 'user', content, actions: null, metadata: { source }, workspaceId: null });
 
     const existingModules = await storage.getModulesByUser(userId);
     const moduleTypes = existingModules.map(m => m.type);
     const user = await storage.getUser(userId);
-    const context: AssistantContext = { mode: user?.mode || 'rental', moduleTypes };
-    const result = await processMessage(content, context);
+    const context: AssistantContext = { userId, mode: user?.mode || 'rental', moduleTypes };
+    const result = await processMessage(content, context, source);
 
-    let newModules: any[] = [];
     if (result.clearDashboard) {
       await storage.deleteAllModulesByUser(userId);
-      await storage.createAction({ userId, actionType: 'clear_dashboard', description: 'Cleared all modules', entityType: 'dashboard', entityId: userId, previousState: existingModules, newState: null, status: 'applied' });
     }
     if (result.switchMode) {
       const nextMode = result.switchMode as UserMode;
       await storage.updateUser(userId, { mode: result.switchMode } as any);
       await storage.deleteAllModulesByUser(userId);
-      for (const m of defaultModules[nextMode]) {
-        const c = await storage.createModule({ userId, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
-        newModules.push(c);
+      const seedModules = defaultModulesByOntology[nextMode] || defaultModulesByOntology.rental;
+      for (const m of seedModules) {
+        await storage.createModule({ userId, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
       }
     }
     if (result.moduleToAdd) {
       const m = result.moduleToAdd;
-      const c = await storage.createModule({ userId, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
-      newModules.push(c);
-      await storage.createAction({ userId, actionType: 'add_module', description: `Added ${m.title}`, entityType: 'module', entityId: c.id, previousState: null, newState: c, status: 'applied' });
+      await storage.createModule({ userId, type: m.type, title: m.title, w: m.w, h: m.h, data: m.data || null, position: 0, visible: true, workspaceId: null });
     }
     if (result.memoryUpdate) {
       await storage.setMemory(userId, result.memoryUpdate.key, result.memoryUpdate.value);
     }
 
     const assistantMsg = await storage.createChatMessage({ userId, role: 'assistant', content: result.response, actions: result.actions, metadata: null, workspaceId: null });
-    return res.json({ assistantMessage: assistantMsg, newModules, switchedMode: result.switchMode, clearedDashboard: result.clearDashboard });
+    return res.json({ assistantMessage: assistantMsg, switchedMode: result.switchMode, clearedDashboard: result.clearDashboard, proposedAction: result.proposedAction, workflow: result.workflow, generativeUI: result.generativeUI });
+  });
+
+  // ── Mutations / Actions Apply ──
+  app.post("/api/actions/apply", requireAuth, async (req: Request, res: Response) => {
+    const userId = req.session.userId!;
+    const { action } = req.body;
+    if (!action || !action.type) return res.status(400).json({ message: "Invalid action" });
+
+    try {
+      let result: any = null;
+      let entityType = action.type.split('-')[1];
+      switch (action.type) {
+        case 'create-vehicle':
+          const vData = insertVehicleSchema.parse({ ...action.payload, userId });
+          result = await storage.createVehicle(vData);
+          break;
+        case 'update-vehicle':
+          result = await storage.updateVehicle(action.id, action.payload);
+          break;
+        case 'create-customer':
+          const cData = insertCustomerSchema.parse({ ...action.payload, userId });
+          result = await storage.createCustomer(cData);
+          break;
+        case 'create-booking':
+          const bData = insertBookingSchema.parse({ ...action.payload, userId, startDate: toDateOrNull(action.payload.startDate), endDate: toDateOrNull(action.payload.endDate) });
+          result = await storage.createBooking(bData);
+          break;
+        case 'create-task':
+          const tData = insertTaskSchema.parse({ ...action.payload, userId, dueDate: toDateOrNull(action.payload.dueDate) });
+          result = await storage.createTask(tData);
+          break;
+        case 'create-note':
+          const nData = insertNoteSchema.parse({ ...action.payload, userId });
+          result = await storage.createNote(nData);
+          break;
+        default:
+          return res.status(400).json({ message: `Unknown action type: ${action.type}` });
+      }
+
+      emitEvent(userId, null, EventTypes.ENTITY_CREATED, { entityType, entityId: result.id, data: result });
+      return res.json({ success: true, result });
+    } catch (e: any) {
+      return res.status(400).json({ message: e.message || "Action failed" });
+    }
+  });
+
+  // ── Notifications ──
+  app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
+    return res.json(await storage.getNotifications(req.session.userId!));
+  });
+  app.patch("/api/notifications/:id/read", requireAuth, async (req: Request, res: Response) => {
+    const id = getRouteParam(req, "id");
+    await storage.markNotificationRead(id);
+    return res.json({ ok: true });
+  });
+  app.post("/api/notifications/read-all", requireAuth, async (req: Request, res: Response) => {
+    await storage.markAllNotificationsRead(req.session.userId!);
+    return res.json({ ok: true });
+  });
+
+  // ── Automations ──
+  app.get("/api/automations", requireAuth, async (req: Request, res: Response) => {
+    return res.json(await storage.getAutomations(req.session.userId!));
+  });
+  app.post("/api/automations", requireAuth, async (req: Request, res: Response) => {
+    const body = insertAutomationSchema.parse({ ...req.body, userId: req.session.userId! });
+    return res.json(await storage.createAutomation(body));
+  });
+
+  // ── Inspections (Vision AI) ──
+  app.get("/api/inspections", requireAuth, async (req: Request, res: Response) => {
+    return res.json(await storage.getInspections(req.session.userId!));
+  });
+  app.post("/api/inspections", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const data = insertInspectionSchema.parse({ ...req.body, userId: req.session.userId!, status: 'processing' });
+      const inspection = await storage.createInspection(data);
+      processInspection(inspection.id, data.mediaUrls || [])
+        .catch(err => console.error("Vision processing failed:", err));
+      return res.json(inspection);
+    } catch (e: any) {
+      return res.status(400).json({ message: e.message || "Invalid inspection data" });
+    }
+  });
+
+  // ── Audit Export ──
+  app.get("/api/audit/export", requireAuth, async (req: Request, res: Response) => {
+    const actions = await storage.getActions(req.session.userId!, 1000);
+    const csv = [
+      "ID,Timestamp,Actor,Action,Entity,Status,Description",
+      ...actions.map(a => `${a.id},${a.createdAt},${a.actorType},${a.actionType},${a.entityType},${a.status},"${a.description}"`)
+    ].join("\\n");
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=nexus-audit-trail.csv');
+    return res.send(csv);
   });
 
   // ── Vehicles ──
@@ -268,19 +360,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
     const v = await storage.createVehicle({ ...req.body, userId: req.session.userId! });
-    await storage.createAction({ userId: req.session.userId!, actionType: 'create_vehicle', description: `Added ${req.body.make} ${req.body.model}`, entityType: 'vehicle', entityId: v.id, previousState: null, newState: v, status: 'applied' });
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, { entityType: 'vehicle', entityId: v.id, data: v });
     return res.json(v);
   });
   app.patch("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    const prev = await storage.getVehicle(id);
     const v = await storage.updateVehicle(id, req.body);
-    await storage.createAction({ userId: req.session.userId!, actionType: 'update_vehicle', description: `Updated vehicle`, entityType: 'vehicle', entityId: id, previousState: prev, newState: v, status: 'applied' });
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, { entityType: 'vehicle', entityId: id, data: v });
     return res.json(v);
   });
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
     await storage.deleteVehicle(id);
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, { entityType: 'vehicle', entityId: id });
     return res.json({ ok: true });
   });
 
@@ -290,16 +382,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/customers", requireAuth, async (req: Request, res: Response) => {
     const c = await storage.createCustomer({ ...req.body, userId: req.session.userId! });
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, { entityType: 'customer', entityId: c.id, data: c });
     return res.json(c);
   });
   app.patch("/api/customers/:id", requireAuth, async (req: Request, res: Response) => {
     const id = getRouteParam(req, "id");
-    return res.json(await storage.updateCustomer(id, req.body));
-  });
-  app.delete("/api/customers/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    await storage.deleteCustomer(id);
-    return res.json({ ok: true });
+    const c = await storage.updateCustomer(id, req.body);
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, { entityType: 'customer', entityId: id, data: c });
+    return res.json(c);
   });
 
   // ── Bookings ──
@@ -316,40 +406,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.body.vehicleId) {
       await storage.updateVehicle(req.body.vehicleId, { status: 'rented' });
     }
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, { entityType: 'booking', entityId: b.id, data: b });
     return res.json(b);
-  });
-  app.patch("/api/bookings/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    const b = await storage.updateBooking(id, {
-      ...req.body,
-      startDate: toDateOrNull(req.body.startDate),
-      endDate: toDateOrNull(req.body.endDate),
-    });
-    if (req.body.status === 'completed' && b?.vehicleId) {
-      await storage.updateVehicle(b.vehicleId, { status: 'available' });
-    }
-    return res.json(b);
-  });
-
-  // ── Maintenance ──
-  app.get("/api/maintenance", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getMaintenanceRecords(req.session.userId!));
-  });
-  app.post("/api/maintenance", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.createMaintenance({
-      ...req.body,
-      userId: req.session.userId!,
-      scheduledDate: toDateOrNull(req.body.scheduledDate),
-      completedDate: toDateOrNull(req.body.completedDate),
-    }));
-  });
-  app.patch("/api/maintenance/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    return res.json(await storage.updateMaintenance(id, {
-      ...req.body,
-      scheduledDate: toDateOrNull(req.body.scheduledDate),
-      completedDate: toDateOrNull(req.body.completedDate),
-    }));
   });
 
   // ── Tasks ──
@@ -357,108 +415,62 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getTasks(req.session.userId!));
   });
   app.post("/api/tasks", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.createTask({ ...req.body, userId: req.session.userId! }));
-  });
-  app.patch("/api/tasks/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    return res.json(await storage.updateTask(id, req.body));
-  });
-  app.delete("/api/tasks/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    await storage.deleteTask(id);
-    return res.json({ ok: true });
-  });
-
-  // ── Notes ──
-  app.get("/api/notes", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getNotes(req.session.userId!));
-  });
-  app.post("/api/notes", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.createNote({ ...req.body, userId: req.session.userId! }));
-  });
-  app.patch("/api/notes/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    return res.json(await storage.updateNote(id, req.body));
-  });
-  app.delete("/api/notes/:id", requireAuth, async (req: Request, res: Response) => {
-    const id = getRouteParam(req, "id");
-    await storage.deleteNote(id);
-    return res.json({ ok: true });
-  });
-
-  // ── Action History ──
-  app.get("/api/actions", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getActions(req.session.userId!));
+    const t = await storage.createTask({ ...req.body, userId: req.session.userId! });
+    emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, { entityType: 'task', entityId: t.id, data: t });
+    return res.json(t);
   });
 
   // ── Dashboard Stats ──
   app.get("/api/stats", requireAuth, async (req: Request, res: Response) => {
     const userId = req.session.userId!;
-    const [vehiclesList, bookingsList, tasksList, customersList, maintenanceList] = await Promise.all([
+    const [vehiclesList, bookingsList, tasksList, customersList, maintenanceList, actions] = await Promise.all([
       storage.getVehicles(userId), storage.getBookings(userId),
       storage.getTasks(userId), storage.getCustomers(userId),
-      storage.getMaintenanceRecords(userId),
+      storage.getMaintenanceRecords(userId), storage.getActions(userId),
     ]);
     const available = vehiclesList.filter(v => v.status === 'available').length;
     const rented = vehiclesList.filter(v => v.status === 'rented').length;
     const inMaintenance = vehiclesList.filter(v => v.status === 'maintenance').length;
     const activeBookings = bookingsList.filter(b => b.status === 'active').length;
-    const pendingTasks = tasksList.filter(t => t.status === 'todo').length;
-    const totalRevenue = bookingsList.filter(b => b.status === 'completed').reduce((sum, b) => sum + parseFloat(b.totalAmount || '0'), 0);
-    const utilization = vehiclesList.length > 0 ? Math.round((rented / vehiclesList.length) * 100) : 0;
+    
+    const completedBookings = bookingsList.filter(b => b.status === 'completed');
+    const totalRevenue = completedBookings.reduce((sum, b) => sum + parseFloat(b.totalAmount || '0'), 0);
+    const totalCost = maintenanceList.reduce((sum, m) => sum + parseFloat(m.cost || '0'), 0);
+    
+    const yieldInsights = calculateYield(vehiclesList.length, rented);
+    const profitability = (totalRevenue - totalCost).toFixed(2);
 
     return res.json({
       fleet: { total: vehiclesList.length, available, rented, maintenance: inMaintenance },
       bookings: { total: bookingsList.length, active: activeBookings, pending: bookingsList.filter(b => b.status === 'pending').length },
-      tasks: { total: tasksList.length, pending: pendingTasks, done: tasksList.filter(t => t.status === 'done').length },
+      tasks: { total: tasksList.length, pending: tasksList.filter(t => t.status === 'todo').length, done: tasksList.filter(t => t.status === 'done').length },
       customers: { total: customersList.length },
       maintenance: { pending: maintenanceList.filter(m => m.status === 'scheduled').length },
-      revenue: { total: totalRevenue, mtd: totalRevenue },
-      utilization,
+      revenue: { total: totalRevenue, mtd: totalRevenue, profitability, revpar: yieldInsights.recommendedMultiplier.toString() },
+      utilization: yieldInsights.utilization,
+      yield: yieldInsights,
+      auditCount: actions.length
     });
   });
 
-  // ── Model Configuration ──
-  app.get("/api/model-config", requireAuth, async (req: Request, res: Response) => {
-    const wss = await storage.getWorkspacesByOwner(req.session.userId!);
-    if (wss.length > 0) return res.json(wss[0].modelConfig || { provider: 'none', model: '', apiKey: '', capabilities: [] });
-    return res.json({ provider: 'none', model: '', apiKey: '', capabilities: [] });
-  });
-
-  app.patch("/api/model-config", requireAuth, async (req: Request, res: Response) => {
-    const wss = await storage.getWorkspacesByOwner(req.session.userId!);
-    if (wss.length > 0) {
-      await storage.updateWorkspace(wss[0].id, { modelConfig: req.body });
-    }
-    return res.json({ ok: true });
-  });
-
-  // ── Proactive Suggestions ──
-  app.get("/api/suggestions", requireAuth, async (req: Request, res: Response) => {
-    const userId = req.session.userId!;
-    const [user, vehiclesList, bookingsList, tasksList, modulesList] = await Promise.all([
-      storage.getUser(userId), storage.getVehicles(userId),
-      storage.getBookings(userId), storage.getTasks(userId),
-      storage.getModulesByUser(userId),
-    ]);
-    const suggestions: { type: string; title: string; description: string; action: string }[] = [];
-    const moduleTypes = modulesList.map(m => m.type);
-
-    if (user?.mode === 'rental') {
-      if (vehiclesList.length === 0) suggestions.push({ type: 'setup', title: 'Add your first vehicle', description: 'Start building your fleet to track availability and bookings.', action: 'navigate:/fleet' });
-      if (bookingsList.length === 0 && vehiclesList.length > 0) suggestions.push({ type: 'setup', title: 'Create your first booking', description: 'Record a rental to start tracking revenue.', action: 'navigate:/bookings' });
-      if (!moduleTypes.includes('checkin')) suggestions.push({ type: 'module', title: 'Add Check-In/Out module', description: 'Quickly process vehicle pickups and returns.', action: 'command:add check-in module' });
-      if (!moduleTypes.includes('maintenance')) suggestions.push({ type: 'module', title: 'Add Maintenance Tracker', description: 'Keep your fleet in top condition.', action: 'command:add maintenance module' });
-    }
-    const overdueTasks = tasksList.filter(t => t.status === 'todo' && t.dueDate && new Date(t.dueDate) < new Date());
-    if (overdueTasks.length > 0) suggestions.push({ type: 'alert', title: `${overdueTasks.length} overdue task(s)`, description: 'Review and update your overdue tasks.', action: 'navigate:/tasks' });
-
-    return res.json(suggestions.slice(0, 5));
-  });
-
   // ── NEXUS ULTRA ──
-  app.get("/api/nexus-ultra", requireAuth, (_req: Request, res: Response) => {
-    return res.json(buildNexusUltraPayload());
+  app.get("/api/nexus-ultra", requireAuth, async (req: Request, res: Response) => {
+    const userId = req.session.userId!;
+    const [vehicles, actions, maintenance] = await Promise.all([
+      storage.getVehicles(userId),
+      storage.getActions(userId),
+      storage.getMaintenanceRecords(userId)
+    ]);
+    
+    const healthScore = Math.max(0, 100 - (maintenance.filter(m => m.status === 'scheduled').length * 5));
+    const compliancePercentage = Math.min(100, 80 + (actions.length / 5));
+
+    return res.json(buildNexusUltraPayload({
+      vehicleCount: vehicles.length,
+      auditCount: actions.length,
+      healthScore,
+      compliancePercentage
+    }));
   });
 
   return httpServer;

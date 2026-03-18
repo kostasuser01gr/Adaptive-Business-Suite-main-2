@@ -1,3 +1,4 @@
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -90,7 +91,7 @@ export interface AppStore {
   addNote: (title: string, content: string) => void;
   toggleNotePin: (noteId: string) => void;
   markNotificationRead: (notificationId: string) => void;
-  sendAssistantCommand: (command: string) => Promise<void>;
+  sendAssistantCommand: (command: string, source?: 'text' | 'voice') => Promise<void>;
   applySuggestion: (suggestionId: string) => void;
   dismissSuggestion: (suggestionId: string) => void;
   rollbackHistoryEntry: (historyId: string) => void;
@@ -331,12 +332,15 @@ export const useAppStore = create<AppStore>()(
           maintenanceDueOn: nowIso(),
           category,
         };
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         set((state) => ({ vehicles: [vehicle, ...state.vehicles] }));
       },
-      updateVehicle: (vehicleId, updates) =>
+      updateVehicle: (vehicleId, updates) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           vehicles: state.vehicles.map((vehicle) => (vehicle.id === vehicleId ? { ...vehicle, ...updates } : vehicle)),
-        })),
+        }));
+      },
       addCustomer: ({ name, phone, email }) => {
         const workspace = getActiveWorkspace(get());
         if (!workspace) return;
@@ -349,6 +353,7 @@ export const useAppStore = create<AppStore>()(
           tag: "standard",
           notes: "",
         };
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         set((state) => ({ customers: [customer, ...state.customers] }));
       },
       updateCustomer: (customerId, updates) =>
@@ -382,6 +387,7 @@ export const useAppStore = create<AppStore>()(
           notes: overlap ? "Conflict warning placeholder triggered." : "",
         };
 
+        Haptics.notificationAsync(overlap ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success);
         set((state) => ({
           bookings: [booking, ...state.bookings],
           notifications: overlap
@@ -402,7 +408,8 @@ export const useAppStore = create<AppStore>()(
 
         return overlap ? "Conflict warning: overlapping booking detected." : null;
       },
-      extendBooking: (bookingId, days) =>
+      extendBooking: (bookingId, days) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         set((state) => ({
           bookings: state.bookings.map((booking) =>
             booking.id === bookingId
@@ -412,8 +419,10 @@ export const useAppStore = create<AppStore>()(
                 }
               : booking,
           ),
-        })),
-      markBookingReturned: (bookingId) =>
+        }));
+      },
+      markBookingReturned: (bookingId) => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         set((state) => ({
           bookings: state.bookings.map((booking) =>
             booking.id === bookingId ? { ...booking, status: "returned" } : booking,
@@ -423,10 +432,12 @@ export const useAppStore = create<AppStore>()(
             if (!booking) return vehicle;
             return vehicle.id === booking.vehicleId ? { ...vehicle, status: "available", availabilityLabel: "Ready now" } : vehicle;
           }),
-        })),
+        }));
+      },
       addMaintenanceItem: ({ vehicleId, title, urgency, dueOn }) => {
         const workspace = getActiveWorkspace(get());
         if (!workspace) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           maintenanceItems: [
             {
@@ -443,15 +454,18 @@ export const useAppStore = create<AppStore>()(
           ],
         }));
       },
-      resolveMaintenanceItem: (maintenanceId) =>
+      resolveMaintenanceItem: (maintenanceId) => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         set((state) => ({
           maintenanceItems: state.maintenanceItems.map((item) =>
             item.id === maintenanceId ? { ...item, status: "resolved" } : item,
           ),
-        })),
+        }));
+      },
       addTask: (title) => {
         const workspace = getActiveWorkspace(get());
         if (!workspace) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           tasks: [
             {
@@ -466,13 +480,16 @@ export const useAppStore = create<AppStore>()(
           ],
         }));
       },
-      updateTaskStatus: (taskId, status) =>
+      updateTaskStatus: (taskId, status) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, status } : task)),
-        })),
+        }));
+      },
       addNote: (title, content) => {
         const workspace = getActiveWorkspace(get());
         if (!workspace) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           notes: [
             {
@@ -498,10 +515,12 @@ export const useAppStore = create<AppStore>()(
             notification.id === notificationId ? { ...notification, read: true } : notification,
           ),
         })),
-      sendAssistantCommand: async (command) => {
+      sendAssistantCommand: async (command, source = 'text') => {
         const state = get();
         const workspace = getActiveWorkspace(state);
         if (!workspace) return;
+
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
         const userMessage: AssistantMessage = {
           id: createId("message"),
@@ -511,7 +530,7 @@ export const useAppStore = create<AppStore>()(
           createdAt: nowIso(),
         };
 
-        const interpretation = await getModelAdapter(state.modelSettings).interpret(command, summarizeContext(state, workspace));
+        const interpretation = await getModelAdapter(state.modelSettings).interpret(command, summarizeContext(state, workspace), source);
         const assistantMessage: AssistantMessage = {
           id: createId("message"),
           workspaceId: workspace.id,
@@ -535,6 +554,7 @@ export const useAppStore = create<AppStore>()(
         const snapshot = cloneWorkspace(workspace);
         const updatedWorkspace = applySuggestionToWorkspace(workspace, suggestion);
 
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         set((current) => ({
           workspaces: current.workspaces.map((candidate) =>
             candidate.id === updatedWorkspace.id ? updatedWorkspace : candidate,
@@ -568,16 +588,19 @@ export const useAppStore = create<AppStore>()(
 
         void noopSyncGateway.pushWorkspaceSnapshot(updatedWorkspace);
       },
-      dismissSuggestion: (suggestionId) =>
+      dismissSuggestion: (suggestionId) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         set((state) => ({
           assistantSuggestions: state.assistantSuggestions.map((candidate) =>
             candidate.id === suggestionId ? { ...candidate, status: "dismissed" } : candidate,
           ),
-        })),
+        }));
+      },
       rollbackHistoryEntry: (historyId) => {
         const entry = get().history.find((candidate) => candidate.id === historyId);
         if (!entry?.previousWorkspaceSnapshot) return;
 
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         set((state) => ({
           workspaces: state.workspaces.map((workspace) =>
             workspace.id === entry.workspaceId ? entry.previousWorkspaceSnapshot! : workspace,
@@ -609,7 +632,7 @@ export const useAppStore = create<AppStore>()(
         workspaces: state.workspaces,
         vehicles: state.vehicles,
         customers: state.customers,
-        bookings: state.bookings,
+        bookings: baseFilter(state.bookings),
         maintenanceItems: state.maintenanceItems,
         tasks: state.tasks,
         notes: state.notes,
@@ -627,3 +650,5 @@ export const useAppStore = create<AppStore>()(
     },
   ),
 );
+
+function baseFilter(items: any[]) { return items; }
