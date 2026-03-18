@@ -7,27 +7,17 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link, useLocation } from 'wouter';
+import { ontologies } from '@shared/ontologies';
+
+const ICON_MAP: Record<string, any> = {
+  LayoutDashboard, CarFront, Calendar, Users, Wrench, CheckSquare, FileText, Wallet, Shield, Settings, Briefcase
+};
 
 export default function Sidebar() {
-  const { mode, setMode, toggleChat, logout, user } = useAppState();
+  const { mode, activeOntology, setMode, toggleChat, logout, user } = useAppState();
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
-
-  const links = [
-    { icon: LayoutDashboard, label: 'Dashboard', path: '/', always: true },
-    { icon: CarFront, label: 'Fleet', path: '/fleet', modes: ['rental'] },
-    { icon: Calendar, label: 'Bookings', path: '/bookings', modes: ['rental'] },
-    { icon: Users, label: 'Customers', path: '/customers', modes: ['rental', 'professional'] },
-    { icon: Wrench, label: 'Maintenance', path: '/maintenance', modes: ['rental'] },
-    { icon: CheckSquare, label: 'Tasks', path: '/tasks', always: true },
-    { icon: FileText, label: 'Notes', path: '/notes', always: true },
-    { icon: Wallet, label: 'Financial', path: '/financial', modes: ['rental', 'professional'] },
-    { icon: Shield, label: 'NEXUS ULTRA', path: '/nexus-ultra', always: true },
-    { icon: Settings, label: 'Settings', path: '/settings', always: true },
-  ].filter(l => l.always || l.modes?.includes(mode));
-
-  const modeLabelMap: Record<string, string> = { rental: 'Car Rental', personal: 'Personal', professional: 'Professional' };
 
   const sidebarContent = (
     <>
@@ -42,8 +32,8 @@ export default function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-0.5">
-        {links.map(link => {
-          const Icon = link.icon;
+        {activeOntology.navigation.map(link => {
+          const Icon = ICON_MAP[link.icon] || LayoutDashboard;
           const isActive = location === link.path;
           return (
             <Link key={link.path} href={link.path}>
@@ -66,23 +56,23 @@ export default function Sidebar() {
         <div className="relative">
           <button
             onClick={() => setModeMenuOpen(o => !o)}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs bg-muted/30 rounded-lg border border-white/5 hover:bg-muted/50 transition-colors"
+            className="w-full flex items-center justify-between px-3 py-2 text-xs glass-card rounded-lg border border-white/10 shadow-lg hover:bg-muted/50 transition-colors"
             data-testid="button-mode-selector"
           >
-            <span className="text-muted-foreground">Mode:</span>
-            <span className="font-medium">{modeLabelMap[mode] || mode}</span>
+            <span className="text-muted-foreground">Ontology:</span>
+            <span className="font-medium">{activeOntology.label}</span>
             <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${modeMenuOpen ? 'rotate-180' : ''}`} />
           </button>
           {modeMenuOpen && (
             <div className="absolute bottom-full left-0 right-0 mb-1 glass-card rounded-lg border border-white/10 p-1 shadow-xl z-50">
-              {(['rental', 'personal', 'professional'] as const).map(m => (
+              {Object.values(ontologies).map(ont => (
                 <button
-                  key={m}
-                  onClick={() => { setMode(m); setModeMenuOpen(false); }}
-                  className={`w-full text-left px-3 py-2 rounded-md text-xs transition-colors ${mode === m ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'}`}
-                  data-testid={`button-mode-${m}`}
+                  key={ont.id}
+                  onClick={() => { setMode(ont.id as any); setModeMenuOpen(false); }}
+                  className={`w-full text-left px-3 py-2 rounded-md text-xs transition-colors ${mode === ont.id ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'}`}
+                  data-testid={`button-mode-${ont.id}`}
                 >
-                  {modeLabelMap[m]}
+                  {ont.label}
                 </button>
               ))}
             </div>
@@ -90,7 +80,7 @@ export default function Sidebar() {
         </div>
 
         <Button
-          className="w-full justify-start text-xs h-9 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+          className="w-full justify-start text-xs h-9 glass-card bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 shadow-[0_0_15px_rgba(139,92,246,0.2)]"
           onClick={() => { toggleChat(); setMobileOpen(false); }}
           data-testid="button-open-assistant"
         >

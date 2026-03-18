@@ -12,12 +12,13 @@ import {
   ModelSettings,
   nowIso,
 } from "../domain/models";
+import { apiClient } from "./apiClient";
 
 export interface ModelAdapter {
   id: ModelProviderId;
   label: string;
   capabilityProfile: string[];
-  interpret(command: string, context: AssistantContextSnapshot): Promise<AssistantInterpretation>;
+  interpret(command: string, context: AssistantContextSnapshot, source?: 'text' | 'voice'): Promise<AssistantInterpretation>;
 }
 
 function suggestionBase(command: string, workspaceId: string | null) {
@@ -189,55 +190,6 @@ function interpretDeterministically(command: string, context: AssistantContextSn
     };
   }
 
-  if (normalized.includes("fleet utilization") || normalized.includes("kpi widget")) {
-    const suggestion: AssistantSuggestion = {
-      ...suggestionBase(command, workspaceId),
-      title: "Add Fleet Utilization KPI widget",
-      description: "Expose utilization as a custom KPI card on the dashboard.",
-      preview: [
-        "A KPI widget appears in the dashboard layout",
-        "This is a placeholder metric today and can be backed by live backend analytics later",
-      ],
-      action: {
-        type: "add-widget",
-        widget: createWidget("custom-kpi", "Fleet Utilization", "Track how much of the fleet is currently active.", "fleetUtilization"),
-      },
-    };
-
-    return {
-      reply: "I generated a KPI widget proposal for fleet utilization.",
-      suggestions: [suggestion],
-    };
-  }
-
-  if (normalized.includes("late return")) {
-    const suggestion: AssistantSuggestion = {
-      ...suggestionBase(command, workspaceId),
-      title: "Create late returns workflow",
-      description: "Add a workflow module and a quick action to handle late return escalation.",
-      preview: [
-        "Adds a Late Returns Workflow module",
-        "Adds a quick action to jump straight into the process",
-        "Provides a future slot for backend-driven escalation rules",
-      ],
-      action: {
-        type: "create-workflow",
-        module: createModule(
-          "late-returns-workflow",
-          "Late Returns Workflow",
-          "Escalate overdue bookings, reminders, and fee follow-up.",
-          "timer",
-        ),
-        quickAction: createQuickAction("Handle Late Return", "timer", "OpenReturns"),
-      },
-    };
-
-    return {
-      reply: "I prepared a late returns workflow proposal with both a module and a quick action.",
-      suggestions: [suggestion],
-    };
-  }
-
   if (normalized.includes("summarize")) {
     return {
       reply: `Workspace ${context.workspace.name} is in ${context.workspace.mode} mode with ${context.workspace.modules.length} module(s), ${context.activeBookingsCount} active booking(s), ${context.availableVehiclesCount} available vehicle(s), and ${context.overdueTasksCount} overdue task(s).`,
@@ -245,28 +197,9 @@ function interpretDeterministically(command: string, context: AssistantContextSn
     };
   }
 
-  if (normalized.includes("recommend next actions")) {
-    return {
-      reply: [
-        `1. Review ${context.todayReturnsCount} return(s) due today.`,
-        `2. Clear ${context.overdueTasksCount} overdue task(s) before adding more work.`,
-        "3. Use the workspace screen to tune modules and quick actions around your busiest flow.",
-      ].join("\n"),
-      suggestions: [],
-    };
-  }
-
-  if (normalized.includes("customize") || normalized.includes("what can")) {
-    return {
-      reply:
-        "You can customize modules, quick actions, dashboard widgets, custom fields, workspace presets, and model routing. Changes are previewed first, saved to history, and rollback-capable where practical.",
-      suggestions: [],
-    };
-  }
-
   return {
     reply:
-      "I can help with modules, quick actions, custom fields, dashboard widgets, preset changes, workflow proposals, and workspace summaries. Try commands like: Add a Damage Reports module, Add a Pickup Location field to Bookings, or Suggest improvements for my dashboard.",
+      "I can help with modules, quick actions, custom fields, dashboard widgets, preset changes, workflow proposals, and workspace summaries. Try: Add a Damage Reports module or Summarize my workspace.",
     suggestions: [],
   };
 }
@@ -278,19 +211,48 @@ export const deterministicAdapter: ModelAdapter = {
   interpret: async (command, context) => interpretDeterministically(command, context),
 };
 
-export const mockLocalAdapter: ModelAdapter = {
-  id: "mock-local",
-  label: "Mock local adapter",
-  capabilityProfile: ["Structured command parsing", "Deterministic fallback", "Proposal generation"],
-  interpret: async (command, context) => interpretDeterministically(command, context),
+export const remoteAdapter: ModelAdapter = {
+  id: "openai",
+  label: "Live AI Adapter",
+  capabilityProfile: ["Semantic reasoning", "RAG-enhanced context", "Proactive automation"],
+  interpret: async (command, context, source = 'text') => {
+    try {
+      const response = await apiClient.chat.send(command, source);
+      const suggestions: AssistantSuggestion[] = [];
+      
+      if (response.proposedAction) {
+        suggestions.push({
+          id: createId("suggestion"),
+          command,
+          workspaceId: context.workspace.id,
+          title: response.proposedAction.label || "AI Proposed Action",
+          description: `AI suggested a ${response.proposedAction.type} mutation.`,
+          preview: [JSON.stringify(response.proposedAction.payload, null, 2)],
+          status: "pending",
+          createdAt: nowIso(),
+          action: {
+            type: "remote-mutation",
+            raw: response.proposedAction
+          } as any
+        });
+      }
+
+      return {
+        reply: response.assistantMessage.content,
+        suggestions,
+        memoryUpdates: []
+      };
+    } catch (err) {
+      console.error("Remote adapter failed, falling back:", err);
+      return interpretDeterministically(command, context);
+    }
+  }
 };
 
-// Future provider integration plugs in here. Remote adapters can keep the same
-// interface and still fall back to deterministic proposals when offline.
 export function getModelAdapter(settings: ModelSettings): ModelAdapter {
   if (settings.fallbackModeEnabled || settings.activeProvider === "none") {
     return deterministicAdapter;
   }
 
-  return mockLocalAdapter;
+  return remoteAdapter;
 }

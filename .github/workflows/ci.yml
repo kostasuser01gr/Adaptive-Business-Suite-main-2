@@ -53,7 +53,7 @@ jobs:
         run: npx drizzle-kit push
 
       - name: Unit tests
-        run: npx tsx --test test/smoke.test.ts
+        run: npx tsx --test test/smoke.test.ts test/model-gateway.test.ts
 
       - name: Integration tests
         run: npx tsx --test test/storage.integration.test.ts

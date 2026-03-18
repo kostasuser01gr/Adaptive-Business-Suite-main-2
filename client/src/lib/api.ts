@@ -22,6 +22,18 @@ export const api = {
     setMode: (mode: string) => fetchAPI('/api/user/mode', { method: 'PATCH', body: JSON.stringify({ mode }) }),
     setPreferences: (prefs: any) => fetchAPI('/api/user/preferences', { method: 'PATCH', body: JSON.stringify(prefs) }),
   },
+  sync: {
+    pull: (since?: string) => fetchAPI(`/api/sync${since ? `?since=${encodeURIComponent(since)}` : ''}`),
+  },
+  notifications: {
+    list: () => fetchAPI('/api/notifications'),
+    read: (id: string) => fetchAPI(`/api/notifications/${id}/read`, { method: 'PATCH' }),
+    readAll: () => fetchAPI('/api/notifications/read-all', { method: 'POST' }),
+  },
+  automations: {
+    list: () => fetchAPI('/api/automations'),
+    create: (data: any) => fetchAPI('/api/automations', { method: 'POST', body: JSON.stringify(data) }),
+  },
   modules: {
     list: () => fetchAPI('/api/modules'),
     create: (data: any) => fetchAPI('/api/modules', { method: 'POST', body: JSON.stringify(data) }),
@@ -32,6 +44,7 @@ export const api = {
     list: () => fetchAPI('/api/chat'),
     send: (content: string) => fetchAPI('/api/chat', { method: 'POST', body: JSON.stringify({ content }) }),
   },
+  applyAction: (action: any) => fetchAPI('/api/actions/apply', { method: 'POST', body: JSON.stringify({ action }) }),
   vehicles: {
     list: () => fetchAPI('/api/vehicles'),
     create: (data: any) => fetchAPI('/api/vehicles', { method: 'POST', body: JSON.stringify(data) }),
