@@ -22,6 +22,20 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (
+            id.includes("recharts") ||
+            id.includes("/d3-") ||
+            id.includes("victory-vendor")
+          ) {
+            return "charts-vendor";
+          }
+        },
+      },
+    },
   },
   server: {
     host: "0.0.0.0",

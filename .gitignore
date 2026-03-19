@@ -5,6 +5,11 @@ dist
 .expo-shared
 .nyc_output
 coverage
+.codex-evidence/
+playwright-report/
+test-results/
+.vercel/
+*.log
 .git.embedded-backup
 nexus-os/
 server/public

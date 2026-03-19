@@ -25,12 +25,14 @@ RUN apk add --no-cache openssl
 WORKDIR /app
 
 # Copy built artefacts from the builder stage
-COPY --from=builder /app/dist ./dist
+COPY --from=builder --chown=node:node /app/dist ./dist
 
 # Expose the port the app listens on
 EXPOSE 5000
 
 ENV NODE_ENV=production
+
+USER node
 
 # Health-check so Railway (and other orchestrators) know when the app is ready
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

@@ -3,8 +3,10 @@ import { createServer, type Server } from "http";
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
+import { pool } from "./db";
 import {
   insertUserSchema,
   insertVehicleSchema,
@@ -56,6 +58,37 @@ async function verifyPassword(
 }
 
 const SessionStore = MemoryStore(session);
+const PostgresSessionStore = connectPgSimple(session);
+
+async function ensureSessionStoreTable() {
+  if (env.NODE_ENV === "test") {
+    return;
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      sid varchar NOT NULL PRIMARY KEY,
+      sess json NOT NULL,
+      expire timestamp(6) NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS user_sessions_expire_idx
+    ON user_sessions (expire)
+  `);
+}
+
+function createSessionStore() {
+  if (env.NODE_ENV === "test") {
+    return new SessionStore({ checkPeriod: 86_400_000 });
+  }
+
+  return new PostgresSessionStore({
+    pool,
+    tableName: "user_sessions",
+  });
+}
 
 declare module "express-session" {
   interface SessionData {
@@ -131,17 +164,25 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express,
 ): Promise<Server> {
+  await ensureSessionStoreTable();
+
   app.use(
     session({
+      name: env.SESSION_COOKIE_NAME,
       secret: env.SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
-      store: new SessionStore({ checkPeriod: 86400000 }),
+      proxy: env.NODE_ENV === "production",
+      unset: "destroy",
+      store: createSessionStore(),
       cookie: {
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        maxAge: env.SESSION_TTL_HOURS * 60 * 60 * 1000,
         httpOnly: true,
-        sameSite: "lax",
-        secure: env.SESSION_COOKIE_SECURE !== "false",
+        sameSite: env.SESSION_COOKIE_SAME_SITE,
+        secure: env.SESSION_COOKIE_SECURE,
+        ...(env.SESSION_COOKIE_DOMAIN
+          ? { domain: env.SESSION_COOKIE_DOMAIN }
+          : {}),
       },
     }),
   );
@@ -225,8 +266,17 @@ export async function registerRoutes(
   );
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
-    req.session.destroy(() => {});
-    return res.json({ ok: true });
+    req.session.destroy(() => {
+      res.clearCookie(env.SESSION_COOKIE_NAME, {
+        httpOnly: true,
+        sameSite: env.SESSION_COOKIE_SAME_SITE,
+        secure: env.SESSION_COOKIE_SECURE,
+        ...(env.SESSION_COOKIE_DOMAIN
+          ? { domain: env.SESSION_COOKIE_DOMAIN }
+          : {}),
+      });
+      return res.json({ ok: true });
+    });
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
