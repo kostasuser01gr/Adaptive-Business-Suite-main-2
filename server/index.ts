@@ -2,13 +2,16 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { checkDatabaseConnection, closeDatabasePool } from "./db";
+import { env, isProduction } from "./config";
 
 const app = express();
 const httpServer = createServer(app);
+const startedAt = Date.now();
 
-// Trust Railway/reverse-proxy X-Forwarded-* headers so req.secure is accurate
-// in production; required for secure session cookies behind HTTPS proxies.
-if (true) { // Always trust proxy for accurate IP detection in rate limiter
+app.disable("x-powered-by");
+
+if (isProduction) {
   app.set("trust proxy", 1);
 }
 
@@ -17,6 +20,39 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+function originIsAllowed(origin?: string): boolean {
+  if (!origin) return true;
+  return env.CORS_ALLOWED_ORIGINS.includes(origin);
+}
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin && originIsAllowed(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization",
+    );
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    );
+    res.append("Vary", "Origin");
+  }
+
+  if (req.method === "OPTIONS") {
+    if (origin && !originIsAllowed(origin)) {
+      return res.status(403).json({ message: "Origin not allowed" });
+    }
+
+    return res.sendStatus(204);
+  }
+
+  return next();
+});
 
 app.use(
   express.json({
@@ -28,10 +64,20 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-app.get("/health", (_req, res) => {
+app.get("/health", async (_req, res) => {
+  const dbStatus = await checkDatabaseConnection();
+  const healthy = dbStatus.ok;
+
   res
-    .status(200)
-    .json({ status: "ok", service: "adaptive-business-suite-backend" });
+    .status(healthy ? 200 : 503)
+    .json({
+      status: healthy ? "ok" : "degraded",
+      service: "adaptive-business-suite-backend",
+      environment: env.NODE_ENV,
+      database: healthy ? "up" : "down",
+      aiProvider: env.AI_PROVIDER,
+      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+    });
 });
 
 export function log(message: string, source = "express") {
@@ -48,30 +94,49 @@ export function log(message: string, source = "express") {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
+      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
     }
   });
 
   next();
 });
 
-(async () => {
+async function shutdown(signal: string) {
+  log(`received ${signal}, closing server`, "shutdown");
+
+  httpServer.close(async (serverError) => {
+    if (serverError) {
+      console.error("[shutdown] HTTP server close failed:", serverError);
+    }
+
+    try {
+      await closeDatabasePool();
+    } catch (dbError) {
+      console.error("[shutdown] database pool close failed:", dbError);
+    } finally {
+      process.exit(serverError ? 1 : 0);
+    }
+  });
+}
+
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+async function startServer() {
+  const dbStatus = await checkDatabaseConnection();
+  if (!dbStatus.ok) {
+    throw dbStatus.error;
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -87,28 +152,35 @@ app.use((req, res, next) => {
     return res.status(status).json({ message });
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (true) { // Always trust proxy for accurate IP detection in rate limiter
+  if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-})();
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(
+      {
+        port: env.PORT,
+        host: env.HOST,
+      },
+      resolve,
+    );
+  });
+
+  log(`serving on ${env.HOST}:${env.PORT} (${env.NODE_ENV})`);
+}
+
+startServer().catch(async (error) => {
+  console.error("[startup] failed to boot:", error);
+
+  try {
+    await closeDatabasePool();
+  } catch (dbError) {
+    console.error("[startup] failed to close database pool:", dbError);
+  }
+
+  process.exit(1);
+});

@@ -1,5 +1,7 @@
+import { fetchApi } from "./http";
+
 async function fetchAPI(url: string, options?: RequestInit) {
-  const res = await fetch(url, {
+  const res = await fetchApi(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",

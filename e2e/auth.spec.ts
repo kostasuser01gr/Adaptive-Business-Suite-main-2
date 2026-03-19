@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 
 // Unique username per test run to avoid state collisions between reruns
 const u = () => `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+const sessionCookieName = process.env.SESSION_COOKIE_NAME ?? "abs.sid";
 
 test.describe("Authentication flows", () => {
   test("health endpoint is reachable", async ({ request }) => {
@@ -135,7 +136,7 @@ test.describe("Authentication flows", () => {
 
     // Playwright stores Set-Cookie into the browser context's jar — inspect it there
     const cookies = await page.context().cookies("http://localhost:5000");
-    const sessionCookie = cookies.find((c) => c.name === "connect.sid");
+    const sessionCookie = cookies.find((c) => c.name === sessionCookieName);
     expect(sessionCookie, "session cookie must exist").toBeTruthy();
     expect(sessionCookie?.httpOnly).toBe(true);
     // SameSite is stored as "Lax", "Strict", or "None" in Playwright's cookie model

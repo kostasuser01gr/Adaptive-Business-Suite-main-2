@@ -1,23 +1,25 @@
+import { Suspense, lazy } from "react";
 import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppStateProvider, useAppState } from "./lib/store";
-import NotFound from "@/pages/not-found";
 
 import AppLayout from "./components/layout/AppLayout";
-import AuthPage from "./pages/auth/AuthPage";
-import DashboardPage from "./pages/dashboard/DashboardPage";
-import FleetPage from "./pages/fleet/FleetPage";
-import BookingsPage from "./pages/bookings/BookingsPage";
-import CustomersPage from "./pages/customers/CustomersPage";
-import TasksPage from "./pages/tasks/TasksPage";
-import NotesPage from "./pages/notes/NotesPage";
-import MaintenancePage from "./pages/maintenance/MaintenancePage";
-import SettingsPage from "./pages/settings/SettingsPage";
-import FinancialPage from "./pages/financial/FinancialPage";
-import NexusUltraPage from "./pages/nexus/NexusUltraPage";
+
+const AuthPage = lazy(() => import("./pages/auth/AuthPage"));
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"));
+const FleetPage = lazy(() => import("./pages/fleet/FleetPage"));
+const BookingsPage = lazy(() => import("./pages/bookings/BookingsPage"));
+const CustomersPage = lazy(() => import("./pages/customers/CustomersPage"));
+const TasksPage = lazy(() => import("./pages/tasks/TasksPage"));
+const NotesPage = lazy(() => import("./pages/notes/NotesPage"));
+const MaintenancePage = lazy(() => import("./pages/maintenance/MaintenancePage"));
+const SettingsPage = lazy(() => import("./pages/settings/SettingsPage"));
+const FinancialPage = lazy(() => import("./pages/financial/FinancialPage"));
+const NexusUltraPage = lazy(() => import("./pages/nexus/NexusUltraPage"));
+const NotFound = lazy(() => import("@/pages/not-found"));
 
 function ProtectedRoute({
   component: Component,
@@ -28,13 +30,21 @@ function ProtectedRoute({
   const { isAuthenticated, isLoading } = useAppState();
   if (isLoading) return null;
   if (!isAuthenticated) return <Redirect to="/auth" />;
-  return <Component />;
+  return (
+    <Suspense fallback={null}>
+      <Component />
+    </Suspense>
+  );
 }
 
 function Router() {
   return (
     <Switch>
-      <Route path="/auth" component={AuthPage} />
+      <Route path="/auth">
+        <Suspense fallback={null}>
+          <AuthPage />
+        </Suspense>
+      </Route>
       <Route path="/">
         <ProtectedRoute component={DashboardPage} />
       </Route>
@@ -65,7 +75,11 @@ function Router() {
       <Route path="/nexus-ultra">
         <ProtectedRoute component={NexusUltraPage} />
       </Route>
-      <Route component={NotFound} />
+      <Route>
+        <Suspense fallback={null}>
+          <NotFound />
+        </Suspense>
+      </Route>
     </Switch>
   );
 }

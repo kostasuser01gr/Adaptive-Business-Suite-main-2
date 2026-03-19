@@ -4,7 +4,7 @@ import path from "path";
 
 /**
  * Vite plugin that updates og:image and twitter:image meta tags
- * to point to the app's opengraph image with the correct Replit domain.
+ * to point to the app's opengraph image with the correct deployment domain.
  */
 export function metaImagesPlugin(): Plugin {
   return {
@@ -12,9 +12,7 @@ export function metaImagesPlugin(): Plugin {
     transformIndexHtml(html) {
       const baseUrl = getDeploymentUrl();
       if (!baseUrl) {
-        log(
-          "[meta-images] no Replit deployment domain found, skipping meta tag updates",
-        );
+        log("[meta-images] no deployment domain found, skipping meta tag updates");
         return html;
       }
 
@@ -60,15 +58,21 @@ export function metaImagesPlugin(): Plugin {
 }
 
 function getDeploymentUrl(): string | null {
-  if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
-    const url = `https://${process.env.REPLIT_INTERNAL_APP_DOMAIN}`;
-    log("[meta-images] using internal app domain:", url);
+  const explicitUrl =
+    process.env.PUBLIC_WEB_ORIGIN ?? process.env.VITE_PUBLIC_WEB_ORIGIN;
+  if (explicitUrl) {
+    const url = explicitUrl.replace(/\/+$/, "");
+    log("[meta-images] using explicit deployment origin:", url);
     return url;
   }
 
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    const url = `https://${process.env.REPLIT_DEV_DOMAIN}`;
-    log("[meta-images] using dev domain:", url);
+  const vercelUrl =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ??
+    process.env.VERCEL_BRANCH_URL ??
+    process.env.VERCEL_URL;
+  if (vercelUrl) {
+    const url = `https://${vercelUrl.replace(/^https?:\/\//, "")}`;
+    log("[meta-images] using Vercel deployment origin:", url);
     return url;
   }
 
