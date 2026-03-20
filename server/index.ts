@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -21,10 +22,98 @@ declare module "http" {
   }
 }
 
+type LogLevel = "debug" | "info" | "warn" | "error";
+type LogFields = Record<string, unknown>;
+
+const logLevelPriority: Record<LogLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+function sanitizeLogFields(fields: LogFields): LogFields {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  );
+}
+
+function shouldLog(level: LogLevel) {
+  return logLevelPriority[level] >= logLevelPriority[env.LOG_LEVEL];
+}
+
+function formatErrorFields(error: unknown): LogFields {
+  if (error instanceof Error) {
+    return sanitizeLogFields({
+      errorName: error.name,
+      errorMessage: error.message,
+      errorStack: env.NODE_ENV === "production" ? undefined : error.stack,
+    });
+  }
+
+  return { errorMessage: String(error) };
+}
+
+function emitLog(
+  level: LogLevel,
+  message: string,
+  source = "express",
+  fields: LogFields = {},
+) {
+  if (!shouldLog(level)) {
+    return;
+  }
+
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    source,
+    message,
+    ...sanitizeLogFields(fields),
+  });
+
+  if (level === "error") {
+    console.error(entry);
+    return;
+  }
+
+  if (level === "warn") {
+    console.warn(entry);
+    return;
+  }
+
+  console.log(entry);
+}
+
+export function log(message: string, source = "express", fields?: LogFields) {
+  emitLog("info", message, source, fields);
+}
+
+function logWarn(message: string, source = "express", fields?: LogFields) {
+  emitLog("warn", message, source, fields);
+}
+
+function logError(message: string, source = "express", fields?: LogFields) {
+  emitLog("error", message, source, fields);
+}
+
 function originIsAllowed(origin?: string): boolean {
   if (!origin) return true;
   return env.CORS_ALLOWED_ORIGINS.includes(origin);
 }
+
+app.use((req, res, next) => {
+  const requestIdHeader = req.headers["x-request-id"];
+  const requestId =
+    typeof requestIdHeader === "string" && requestIdHeader.trim().length > 0
+      ? requestIdHeader.trim()
+      : randomUUID();
+
+  res.locals.requestId = requestId;
+  res.setHeader("x-request-id", requestId);
+
+  next();
+});
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -40,11 +129,19 @@ app.use((req, res, next) => {
       "Access-Control-Allow-Methods",
       "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     );
+    res.setHeader("Access-Control-Expose-Headers", "x-request-id");
     res.append("Vary", "Origin");
   }
 
   if (req.method === "OPTIONS") {
     if (origin && !originIsAllowed(origin)) {
+      logWarn("cors preflight rejected", "http", {
+        method: req.method,
+        path: req.path,
+        origin,
+        requestId: res.locals.requestId,
+      });
+
       return res.status(403).json({ message: "Origin not allowed" });
     }
 
@@ -80,17 +177,6 @@ app.get("/health", async (_req, res) => {
     });
 });
 
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
-
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -98,7 +184,13 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
+      log("request completed", "http", {
+        requestId: res.locals.requestId,
+        method: req.method,
+        path,
+        statusCode: res.statusCode,
+        durationMs: duration,
+      });
     }
   });
 
@@ -106,17 +198,23 @@ app.use((req, res, next) => {
 });
 
 async function shutdown(signal: string) {
-  log(`received ${signal}, closing server`, "shutdown");
+  log("received shutdown signal", "shutdown", { signal });
 
   httpServer.close(async (serverError) => {
     if (serverError) {
-      console.error("[shutdown] HTTP server close failed:", serverError);
+      logError("http server close failed", "shutdown", {
+        signal,
+        ...formatErrorFields(serverError),
+      });
     }
 
     try {
       await closeDatabasePool();
     } catch (dbError) {
-      console.error("[shutdown] database pool close failed:", dbError);
+      logError("database pool close failed", "shutdown", {
+        signal,
+        ...formatErrorFields(dbError),
+      });
     } finally {
       process.exit(serverError ? 1 : 0);
     }
@@ -139,8 +237,22 @@ async function startServer() {
 
   await registerRoutes(httpServer, app);
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    if (err?.code === "EBADCSRFTOKEN") {
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    const error = err as {
+      code?: string;
+      status?: number;
+      statusCode?: number;
+      message?: string;
+    };
+
+    if (error.code === "EBADCSRFTOKEN") {
+      logWarn("csrf validation failed", "http", {
+        requestId: res.locals.requestId,
+        method: _req.method,
+        path: _req.path,
+        statusCode: 403,
+      });
+
       if (res.headersSent) {
         return next(err);
       }
@@ -150,10 +262,16 @@ async function startServer() {
         .json({ message: "Invalid or missing CSRF token" });
     }
 
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    const status = error.status || error.statusCode || 500;
+    const message = error.message || "Internal Server Error";
 
-    console.error("Internal Server Error:", err);
+    logError("request failed", "http", {
+      requestId: res.locals.requestId,
+      method: _req.method,
+      path: _req.path,
+      statusCode: status,
+      ...formatErrorFields(err),
+    });
 
     if (res.headersSent) {
       return next(err);
@@ -180,16 +298,24 @@ async function startServer() {
     );
   });
 
-  log(`serving on ${env.HOST}:${env.PORT} (${env.NODE_ENV})`);
+  log("server started", "startup", {
+    host: env.HOST,
+    port: env.PORT,
+    environment: env.NODE_ENV,
+  });
 }
 
 startServer().catch(async (error) => {
-  console.error("[startup] failed to boot:", error);
+  logError("server failed to boot", "startup", formatErrorFields(error));
 
   try {
     await closeDatabasePool();
   } catch (dbError) {
-    console.error("[startup] failed to close database pool:", dbError);
+    logError(
+      "startup cleanup failed while closing database pool",
+      "startup",
+      formatErrorFields(dbError),
+    );
   }
 
   process.exit(1);
