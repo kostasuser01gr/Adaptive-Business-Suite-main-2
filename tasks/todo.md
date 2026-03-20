@@ -6,7 +6,7 @@
 - [x] Reproduce the highest-priority failure on the clean branch before editing.
 - [x] Apply the smallest verified hardening fixes.
 - [x] Run full local live validation for web, backend, mobile, security, and browser flows.
-- [ ] Push the isolated hardening branch and inspect remote workflow results.
+- [x] Push the isolated hardening branch and inspect remote workflow results.
 - [x] Record evidence, lessons, and final review.
 
 ## Validation Map
@@ -22,11 +22,11 @@
 
 ## Current Phase
 
-- Phase 12: remote CI evidence gate
+- Phase 16: final reporting
 
 ## Blockers
 
-- No remote workflow has run yet for `codex/ultra-hardening-v4-live`.
+- None.
 
 ## Review / Results
 
@@ -52,3 +52,7 @@
 - Failure classification:
   - `FAIL-001` Lint/type defect. Root cause: stale third-party wrapper types and iterator spread mismatch. Fixed locally and revalidated.
   - `FAIL-002` Environment misuse during Playwright orchestration. Root cause: manual prod server run without `PLAYWRIGHT_USE_PROD_SERVER=1`, causing CSRF/session mismatch. Reclassified as operator error, corrected by using the repository's intended test orchestration.
+- Remote workflow results for commit `4d9852e5e005752fcb05ce5fcc85809c69e4980a`:
+  - `CI` run `23350734930`: success
+  - `Security` run `23350734922`: success
+  - `CodeQL` run `23350734929`: success
