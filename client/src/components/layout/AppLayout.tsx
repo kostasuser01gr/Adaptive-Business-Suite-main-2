@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useAppState } from "@/lib/store";
 import Sidebar from "./Sidebar";
 import AssistantChat from "./AssistantChat";
@@ -14,6 +14,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     isAuthenticated,
     isLoading,
     user,
+    preferences,
     isChatOpen,
     isNotificationsOpen,
     notifications,
@@ -23,6 +24,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     markNotificationRead,
     markAllNotificationsRead,
   } = useAppState();
+
+  useEffect(() => {
+    document.documentElement.dataset.motion = preferences.shell.motion;
+    document.documentElement.dataset.appDensity = preferences.shell.density;
+
+    return () => {
+      delete document.documentElement.dataset.motion;
+      delete document.documentElement.dataset.appDensity;
+    };
+  }, [preferences.shell.density, preferences.shell.motion]);
 
   if (isLoading) {
     return (
@@ -37,8 +48,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) return <>{children}</>;
 
+  const headerClass =
+    preferences.shell.density === "compact" ? "h-12 px-3 sm:px-4" : "h-14 px-4 sm:px-6";
+  const mainClass =
+    preferences.shell.density === "compact"
+      ? "p-3 sm:p-4 pb-20 lg:pb-4"
+      : "p-4 sm:p-6 pb-20 lg:pb-6";
+
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-background">
+    <div
+      className="flex h-[100dvh] overflow-hidden bg-background"
+      data-density={preferences.shell.density}
+      data-motion={preferences.shell.motion}
+      data-testid="app-shell"
+    >
       <CommandBar />
       <NotificationsSheet
         notifications={notifications}
@@ -51,7 +74,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <Sidebar />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-white/5 bg-background/80 backdrop-blur-xl flex items-center justify-between px-4 sm:px-6 z-10 sticky top-0">
+        <header
+          className={`border-b border-white/5 bg-background/80 backdrop-blur-xl flex items-center justify-between z-10 sticky top-0 ${headerClass}`}
+        >
           <div className="flex items-center gap-3 pl-10 lg:pl-0">
             <button
               onClick={() => setCommandBarOpen(true)}
@@ -98,7 +123,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-4 sm:p-6 pb-20 lg:pb-6 relative">
+        <main className={`flex-1 overflow-auto relative ${mainClass}`}>
           {children}
         </main>
       </div>
