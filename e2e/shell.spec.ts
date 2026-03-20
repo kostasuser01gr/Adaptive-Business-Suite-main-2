@@ -202,4 +202,25 @@ test.describe("Shell experience", () => {
     await expect(page.getByTestId("command-bar")).toContainText("Pinned");
     await expect(page.getByTestId("command-bar")).toContainText("Tasks");
   });
+
+  test("shows shell control signals and quick actions", async ({ page }) => {
+    await registerAndLogin(page);
+
+    const taskResponse = await postWithCsrf(page.request, "/api/tasks", {
+      title: "Shell control task",
+      status: "todo",
+      priority: "high",
+    });
+    expect(taskResponse.ok()).toBeTruthy();
+
+    await page.goto("/");
+
+    await expect(page.getByTestId("shell-control-card")).toBeVisible();
+    await expect(page.getByTestId("shell-posture-badge")).toBeVisible();
+    await expect(page.getByTestId("shell-signal-tasks")).toContainText("1");
+    await expect(page.getByTestId("shell-quick-actions")).toBeVisible();
+
+    await page.getByTestId("button-shell-quick-tasks").click();
+    await expect(page.getByTestId("text-tasks-title")).toBeVisible();
+  });
 });

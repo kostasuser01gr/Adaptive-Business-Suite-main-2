@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useAppState } from "@/lib/store";
 import {
+  BellRing,
   CarFront,
   LayoutDashboard,
   Calendar,
@@ -22,6 +23,7 @@ import {
   Pin,
   PinOff,
   Clock3,
+  ArrowUpRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
@@ -32,6 +34,11 @@ import {
   supportedShellRoutes,
   useShellMemory,
 } from "@/lib/shell-memory";
+import {
+  buildShellSignals,
+  deriveShellPosture,
+  type ShellPostureTone,
+} from "@/lib/shell-control";
 
 const ICON_MAP: Record<string, any> = {
   LayoutDashboard,
@@ -49,7 +56,17 @@ const ICON_MAP: Record<string, any> = {
 };
 
 export default function Sidebar() {
-  const { mode, activeOntology, setMode, toggleChat, logout, user } =
+  const {
+    mode,
+    activeOntology,
+    setMode,
+    toggleChat,
+    logout,
+    setNotificationsOpen,
+    stats,
+    unreadNotificationsCount,
+    user,
+  } =
     useAppState();
   const [location, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -73,10 +90,91 @@ export default function Sidebar() {
     .filter((path) => !favorites.includes(path))
     .map((path) => shellRouteMap.get(path))
     .filter((route): route is NonNullable<typeof route> => Boolean(route));
+  const posture = useMemo(
+    () => deriveShellPosture({ stats, unreadNotificationsCount }),
+    [stats, unreadNotificationsCount],
+  );
+  const controlSignals = useMemo(
+    () =>
+      buildShellSignals({
+        activeOntology,
+        stats,
+        unreadNotificationsCount,
+      }),
+    [activeOntology, stats, unreadNotificationsCount],
+  );
+  const quickActions = useMemo(
+    () => [
+      {
+        id: "today",
+        label: "Today",
+        description: "Return to the live operator board.",
+        icon: Sparkles,
+        onClick: () => openRoute("/today"),
+      },
+      {
+        id: "tasks",
+        label: "Tasks",
+        description: "Drop into the active execution queue.",
+        icon: CheckSquare,
+        onClick: () => openRoute("/tasks"),
+      },
+      {
+        id: "notifications",
+        label: unreadNotificationsCount > 0 ? "Alerts" : "Inbox",
+        description:
+          unreadNotificationsCount > 0
+            ? `${unreadNotificationsCount} unread ${unreadNotificationsCount === 1 ? "alert" : "alerts"}`
+            : "Open the notification stack.",
+        icon: BellRing,
+        onClick: () => {
+          setNotificationsOpen(true);
+          setMobileOpen(false);
+        },
+      },
+      {
+        id: "assistant",
+        label: "Assistant",
+        description: "Open Nexus for guided actions.",
+        icon: Bot,
+        onClick: () => {
+          toggleChat();
+          setMobileOpen(false);
+        },
+      },
+    ],
+    [setNotificationsOpen, toggleChat, unreadNotificationsCount],
+  );
 
   function openRoute(path: string) {
     setLocation(path);
     setMobileOpen(false);
+  }
+
+  function postureClasses(tone: ShellPostureTone) {
+    switch (tone) {
+      case "critical":
+        return "border-rose-400/20 bg-rose-400/10 text-rose-300";
+      case "attention":
+        return "border-amber-400/20 bg-amber-400/10 text-amber-300";
+      case "watch":
+        return "border-sky-400/20 bg-sky-400/10 text-sky-300";
+      default:
+        return "border-emerald-400/20 bg-emerald-400/10 text-emerald-300";
+    }
+  }
+
+  function signalClasses(tone: ShellPostureTone) {
+    switch (tone) {
+      case "critical":
+        return "border-rose-400/15 bg-rose-400/[0.08] hover:bg-rose-400/[0.12]";
+      case "attention":
+        return "border-amber-400/15 bg-amber-400/[0.08] hover:bg-amber-400/[0.12]";
+      case "watch":
+        return "border-sky-400/15 bg-sky-400/[0.08] hover:bg-sky-400/[0.12]";
+      default:
+        return "border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.05]";
+    }
   }
 
   const sidebarContent = (
@@ -158,6 +256,68 @@ export default function Sidebar() {
           </div>
         ) : null}
 
+        <div
+          className="mb-4 rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.05] to-white/[0.02] p-3 shadow-[0_12px_40px_rgba(5,10,20,0.28)]"
+          data-testid="shell-control-card"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+                Control Center
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <span
+                  className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${postureClasses(posture.tone)}`}
+                  data-testid="shell-posture-badge"
+                >
+                  {posture.label}
+                </span>
+                <span className="truncate text-[11px] text-foreground/80">
+                  {posture.primaryFocus}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                {posture.summary}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-2">
+              <ArrowUpRight className="h-4 w-4 text-primary" />
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {controlSignals.map((signal) => (
+              <button
+                key={signal.id}
+                type="button"
+                onClick={() => {
+                  if (signal.id === "alerts") {
+                    setNotificationsOpen(true);
+                    setMobileOpen(false);
+                    return;
+                  }
+
+                  openRoute(signal.href);
+                }}
+                className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${signalClasses(signal.tone)}`}
+                data-testid={`shell-signal-${signal.id}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
+                    {signal.label}
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">
+                    {signal.count}
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+                  {signal.description}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {primaryLinks.map((link) => {
           const Icon = ICON_MAP[link.icon] || LayoutDashboard;
           const isActive = location === link.path;
@@ -210,6 +370,36 @@ export default function Sidebar() {
             </div>
           );
         })}
+
+        <div className="mt-4 mb-2">
+          <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+            Quick Actions
+          </p>
+          <div className="grid grid-cols-2 gap-2 px-1" data-testid="shell-quick-actions">
+            {quickActions.map((action) => {
+              const Icon = action.icon;
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={action.onClick}
+                  className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 text-left transition-colors hover:bg-white/[0.05]"
+                  data-testid={`button-shell-quick-${action.id}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-[11px] font-semibold text-foreground">
+                      {action.label}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+                    {action.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <div className="p-3 border-t border-white/5 space-y-2 shrink-0">
