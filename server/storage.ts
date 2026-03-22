@@ -294,7 +294,7 @@ export class DatabaseStorage implements IStorage {
     const privileged = await this.isPrivileged(userId);
     if (!privileged) {
       return res.map(
-        ({ dailyRate, ...rest }) => ({ ...rest, dailyRate: null }) as any,
+        ({ dailyRate: _dr, ...rest }) => ({ ...rest, dailyRate: null as string | null }),
       );
     }
     return res;
@@ -305,7 +305,7 @@ export class DatabaseStorage implements IStorage {
       .from(vehicles)
       .where(and(eq(vehicles.id, id), eq(vehicles.userId, userId)));
     if (v && !(await this.isPrivileged(userId))) {
-      return { ...v, dailyRate: null } as any;
+      return { ...v, dailyRate: null as string | null };
     }
     return v;
   }
@@ -369,7 +369,7 @@ export class DatabaseStorage implements IStorage {
     if (!privileged) {
       return res.map(
         ({ totalAmount, deposit, ...rest }) =>
-          ({ ...rest, totalAmount: null, deposit: null }) as any,
+          ({ ...rest, totalAmount: null as string | null, deposit: null as string | null }),
       );
     }
     return res;
@@ -380,7 +380,7 @@ export class DatabaseStorage implements IStorage {
       .from(bookings)
       .where(and(eq(bookings.id, id), eq(bookings.userId, userId)));
     if (b && !(await this.isPrivileged(userId))) {
-      return { ...b, totalAmount: null, deposit: null } as any;
+      return { ...b, totalAmount: null as string | null, deposit: null as string | null };
     }
     return b;
   }

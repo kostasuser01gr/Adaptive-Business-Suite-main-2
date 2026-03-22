@@ -22,7 +22,8 @@ export function resolveApiUrl(path: string): string {
 
 function isRetryable(error: unknown, response?: Response): boolean {
   if (!response) return true; // network error
-  return response.status >= 500;
+  const s = response.status;
+  return s >= 500 || s === 429 || s === 408;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -44,9 +45,10 @@ export async function fetchApi(
         return response;
       }
 
-      // 5xx — retry if attempts remain
+      // retryable — retry with exponential backoff + jitter
       if (attempt < MAX_RETRIES) {
-        await sleep(BASE_DELAY_MS * 2 ** attempt);
+        const jitter = Math.random() * 0.5 + 0.75; // 0.75–1.25x
+        await sleep(BASE_DELAY_MS * 2 ** attempt * jitter);
         continue;
       }
 
@@ -55,7 +57,8 @@ export async function fetchApi(
       lastError = error;
 
       if (attempt < MAX_RETRIES) {
-        await sleep(BASE_DELAY_MS * 2 ** attempt);
+        const jitter = Math.random() * 0.5 + 0.75;
+        await sleep(BASE_DELAY_MS * 2 ** attempt * jitter);
         continue;
       }
     }

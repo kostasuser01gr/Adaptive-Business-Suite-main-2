@@ -40,6 +40,7 @@ export default defineConfig({
       SESSION_COOKIE_SAME_SITE: "lax",
       SESSION_COOKIE_SECURE: "false",
       RATE_LIMIT_MAX: "10000",
+      RATE_LIMIT_AUTH_MAX: "10000",
       AI_PROVIDER: "none",
     },
   },

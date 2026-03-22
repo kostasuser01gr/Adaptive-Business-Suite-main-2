@@ -163,6 +163,13 @@ app.use((req, res, next) => {
 async function shutdown(signal: string) {
   logger.info({ signal }, "received signal, closing server");
 
+  // Force exit after 10 seconds if graceful close hangs
+  const forceTimer = setTimeout(() => {
+    logger.warn("graceful shutdown timed out after 10s, forcing exit");
+    process.exit(1);
+  }, 10_000);
+  forceTimer.unref();
+
   httpServer.close(async (serverError) => {
     if (serverError) {
       logger.error({ err: serverError }, "HTTP server close failed");
@@ -173,6 +180,7 @@ async function shutdown(signal: string) {
     } catch (dbError) {
       logger.error({ err: dbError }, "database pool close failed");
     } finally {
+      clearTimeout(forceTimer);
       process.exit(serverError ? 1 : 0);
     }
   });

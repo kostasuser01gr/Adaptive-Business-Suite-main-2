@@ -18,6 +18,7 @@ import {
   insertNoteSchema,
   insertAutomationSchema,
   insertInspectionSchema,
+  insertModuleSchema,
 } from "@shared/schema";
 import MemoryStore from "memorystore";
 import { buildNexusUltraPayload } from "./nexus-ultra";
@@ -353,6 +354,21 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const userId = req.session.userId!;
+      if (
+        req.body == null ||
+        typeof req.body !== "object" ||
+        Array.isArray(req.body)
+      ) {
+        return res
+          .status(400)
+          .json({ message: "Preferences must be a JSON object" });
+      }
+      const raw = JSON.stringify(req.body);
+      if (raw.length > 8192) {
+        return res
+          .status(400)
+          .json({ message: "Preferences payload too large (max 8 KB)" });
+      }
       const user = await storage.updateUser(userId, {
         preferences: req.body,
       });
@@ -378,17 +394,13 @@ export async function registerRoutes(
   });
 
   app.post("/api/modules", requireAuth, async (req: Request, res: Response) => {
-    const mod = await storage.createModule({
+    const body = insertModuleSchema.parse({
+      ...req.body,
       userId: req.session.userId!,
       type: req.body.type || "generic",
       title: req.body.title || "New Module",
-      w: String(req.body.w || "1"),
-      h: String(req.body.h || "1"),
-      data: req.body.data || null,
-      position: req.body.position || 0,
-      visible: true,
-      workspaceId: null,
     });
+    const mod = await storage.createModule(body);
     return res.json(mod);
   });
 
@@ -667,11 +679,19 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const actions = await storage.getActions(req.session.userId!, 1000);
+      const esc = (v: unknown): string => {
+        const s = String(v ?? "").replace(/"/g, '""');
+        // Strip CSV formula injection characters at start of field
+        const safe = s.replace(/^[=+\-@\t\r]/, "'$&");
+        return `"${safe}"`;
+      };
       const csv = [
         "ID,Timestamp,Actor,Action,Entity,Status,Description",
         ...actions.map(
           (a) =>
-            `${a.id},${a.createdAt},${a.actorType},${a.actionType},${a.entityType},${a.status},"${a.description}"`,
+            [a.id, a.createdAt, a.actorType, a.actionType, a.entityType, a.status, a.description]
+              .map(esc)
+              .join(","),
         ),
       ].join("\n");
 
@@ -693,8 +713,9 @@ export async function registerRoutes(
     "/api/vehicles",
     requireAuth,
     async (req: Request, res: Response) => {
+      const body = insertVehicleSchema.parse(req.body);
       const v = await storage.createVehicle({
-        ...req.body,
+        ...body,
         userId: req.session.userId!,
       });
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {
@@ -748,8 +769,9 @@ export async function registerRoutes(
     "/api/customers",
     requireAuth,
     async (req: Request, res: Response) => {
+      const body = insertCustomerSchema.parse(req.body);
       const c = await storage.createCustomer({
-        ...req.body,
+        ...body,
         userId: req.session.userId!,
       });
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {

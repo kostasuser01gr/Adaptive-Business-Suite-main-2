@@ -4,16 +4,27 @@ import * as schema from "@shared/schema";
 import { env, isProduction } from "./config";
 import { logger } from "./logger";
 
-function resolveSsl(): false | { rejectUnauthorized: false } {
+/**
+ * Resolve SSL config for the database connection.
+ *
+ * `rejectUnauthorized` is `false` by default because managed Postgres
+ * providers (Railway, Neon, Supabase) use self-signed or provider-CA
+ * certificates that Node.js doesn't trust out of the box. Set
+ * `DATABASE_SSL_REJECT_UNAUTHORIZED=true` when your provider supplies
+ * a publicly-trusted or pinned CA certificate.
+ */
+function resolveSsl(): false | { rejectUnauthorized: boolean } {
   if (env.DATABASE_SSL_MODE === "disable") {
     return false;
   }
 
+  const reject = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "true";
+
   if (env.DATABASE_SSL_MODE === "require") {
-    return { rejectUnauthorized: false };
+    return { rejectUnauthorized: reject };
   }
 
-  return isProduction ? { rejectUnauthorized: false } : false;
+  return isProduction ? { rejectUnauthorized: reject } : false;
 }
 
 export const pool = new pg.Pool({
