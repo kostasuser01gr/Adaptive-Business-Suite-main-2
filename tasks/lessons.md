@@ -5,6 +5,7 @@
 - Compose or deployment examples with literal credentials are still security debt because they normalize unsafe copy-paste behavior and can leak into real environments.
 - When `drizzle-kit push` requires a TTY, do not keep retrying the same non-interactive command; fall back to the checked-in SQL migration if the goal is runtime validation rather than migration authoring.
 - Separate contaminated browser evidence from clean reruns. A later green rerun can prove the real state, but the original mixed run must still be kept and explained.
+- If third-party library typings are unstable across environments, prefer a small local adapter type over importing brittle internals or widening compiler settings.
 - Start every session with the required environment snapshot and preserve user-owned uncommitted work before branching or editing.
 - Wrapper components around third-party UI libraries must track the actual exported API names from the installed package, not older upstream examples.
 - Avoid iterator spread on `Map.values()` when the repository compiler target is effectively ES5; use `Array.from(...)` for compatibility instead of changing compiler semantics blindly.

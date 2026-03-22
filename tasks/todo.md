@@ -20,7 +20,7 @@
 
 ### Current Phase
 
-Evidence consolidation and blocker classification.
+Evidence consolidation and final remote validation closure.
 
 ### Checklist
 
@@ -30,14 +30,14 @@ Evidence consolidation and blocker classification.
 - [x] Initial critical risks identified.
 - [x] Fresh local validation run captured for the current state.
 - [x] Remote GitHub read-only state inspected for the current branch.
-- [ ] GitHub push/remote validation completed for a new hardened commit.
+- [x] GitHub push/remote validation completed for a new hardened commit.
 - [x] Evidence manifest refreshed for this cycle.
 
 ### Blockers
 
 - Dirty worktree contains many user-owned changes outside the current Spec Kit documents, so broad hardening edits have high merge-risk unless a specific target is chosen.
 - `.env.enterprise` exists locally with secret-shaped values; it is ignored by git, but any live rotation/revocation action depends on whether those credentials are real and still active.
-- GitHub push and remote workflow execution for a new hardened commit are blocked by a heavily dirty worktree with many user-owned staged and unstaged changes; pushing safely requires an explicit branch/commit strategy that does not capture unrelated work.
+- The worktree remains broadly dirty outside the pushed audit fixes, so any further changes should continue to use narrow staging and commit scopes.
 
 ### Blast Radius Notes
 
@@ -64,7 +64,7 @@ Evidence consolidation and blocker classification.
 - Discovery budget: 20m, actual: 15m
 - Validation budget: 35m, actual: 45m
 - Failure analysis/fix budget: 25m, actual: 20m
-- Remote validation budget: 20m, actual: 5m read-only inspection
+- Remote validation budget: 20m, actual: 30m push/fix/watch loop
 
 ### Results Summary
 
@@ -75,8 +75,10 @@ Evidence consolidation and blocker classification.
   `npm --prefix mobile run typecheck` passed.
   `npm run security:audit` passed.
   `npm run test:integration` passed against a disposable local PostgreSQL database after applying the checked-in SQL migration directly with `psql`.
-  Clean Chromium Playwright rerun passed with `35 passed, 1 skipped`; the earlier full-browser run was contaminated by an empty database at startup and cannot be treated as a clean all-browser proof.
-- Known risks remain: hardcoded credentials in `docker-compose.enterprise.yml`, a local secret-bearing `.env.enterprise`, noisy `NO_COLOR`/`FORCE_COLOR` warnings during Playwright runs, and no safe GitHub push/remote CI execution for a new commit in this cycle.
+  Clean Chromium Playwright rerun passed with `35 passed, 1 skipped`.
+  Clean full-browser Playwright rerun passed with `105 passed, 3 skipped`.
+  Latest pushed commit `659474e7993129abacc93cd6b4b9147590a93099` is green in GitHub Actions for `CI` (`23406343728`), `Security` (`23406343735`), and `CodeQL` (`23406343739`).
+- Known risks remain: a local secret-bearing `.env.enterprise`, noisy `NO_COLOR`/`FORCE_COLOR` warnings during Playwright runs, and substantial unrelated dirty worktree state outside the hardened commit scope.
 
 ## V7 Hardening Cycle (2026-03-20)
 

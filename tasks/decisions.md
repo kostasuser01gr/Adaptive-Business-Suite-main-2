@@ -85,3 +85,25 @@ Provision the disposable audit database with the checked-in SQL migration throug
   Rejected because a reachable local PostgreSQL instance was available.
 - Keep retrying `drizzle-kit push` without changing approach.
   Rejected because the failure mode was clearly interactive rather than transient.
+
+## 2026-03-22 - Remote Validation Closure
+
+### Decision
+
+Use a narrow push/fix/watch loop on the existing branch to achieve remote green, rather than stopping at local green because the broader worktree remained dirty.
+
+### Rationale
+
+The repository already had an active branch and working GitHub auth. Narrow staging allowed the validated fixes to be pushed without reverting or absorbing unrelated user work, and the resulting remote runs proved the hardened commit directly.
+
+### Alternatives Rejected
+
+- Stop after local validation and report remote CI as an external blocker.
+  Rejected because push and GitHub Actions execution were feasible.
+- Create a new cleanup branch and restage the whole worktree.
+  Rejected because it would have increased risk of accidentally capturing unrelated modifications.
+
+### Assumptions
+
+- The pushed commits reflected only the intended hardened surfaces and supporting documentation.
+- Existing unrelated dirty files should remain untouched until explicitly scoped into a future change.
