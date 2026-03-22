@@ -885,17 +885,43 @@ export async function registerRoutes(
     },
   );
 
+  app.delete(
+    "/api/bookings/:id",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const id = getRouteParam(req, "id");
+      const userId = req.session.userId!;
+      const existing = await storage.getBooking(id, userId);
+      if (!existing) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+      // Release associated vehicle if booking was active
+      if (existing.vehicleId && existing.status === "active") {
+        await storage.updateVehicle(existing.vehicleId, userId, {
+          status: "available",
+        });
+      }
+      await storage.deleteBooking(id, userId);
+      emitEvent(userId, null, EventTypes.ENTITY_DELETED, {
+        entityType: "booking",
+        entityId: id,
+      });
+      return res.json({ success: true });
+    },
+  );
+
   // ── Tasks ──
   app.get("/api/tasks", requireAuth, async (req: Request, res: Response) => {
     const pagination = parsePagination(req.query);
     return res.json(await storage.getTasks(req.session.userId!, pagination));
   });
   app.post("/api/tasks", requireAuth, async (req: Request, res: Response) => {
-    const t = await storage.createTask({
+    const body = insertTaskSchema.parse({
       ...req.body,
       userId: req.session.userId!,
       dueDate: toDateOrNull(req.body.dueDate),
     });
+    const t = await storage.createTask(body);
     emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {
       entityType: "task",
       entityId: t.id,
@@ -948,10 +974,11 @@ export async function registerRoutes(
     return res.json(await storage.getNotes(req.session.userId!, pagination));
   });
   app.post("/api/notes", requireAuth, async (req: Request, res: Response) => {
-    const note = await storage.createNote({
+    const body = insertNoteSchema.parse({
       ...req.body,
       userId: req.session.userId!,
     });
+    const note = await storage.createNote(body);
     emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {
       entityType: "note",
       entityId: note.id,
