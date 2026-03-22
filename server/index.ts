@@ -96,7 +96,7 @@ app.use(
   "/api/",
   rateLimit({
     windowMs: 60_000,
-    max: env.NODE_ENV === "test" ? 10_000 : 100,
+    max: Number(process.env.RATE_LIMIT_MAX) || 200,
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: "Too many requests, please try again later." },

@@ -41,7 +41,7 @@ function getAuthBucketKey(req: Request): string {
 const makeLimiter = () =>
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: env.NODE_ENV === "test" ? 10000 : 20,
+    max: Number(process.env.RATE_LIMIT_AUTH_MAX) || 20,
     standardHeaders: true,
     legacyHeaders: false,
     skipSuccessfulRequests: true,
