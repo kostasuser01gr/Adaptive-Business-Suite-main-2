@@ -6,8 +6,9 @@ import csurf from "@dr.pogodin/csurf";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { storage } from "./storage";
+import { storage, parsePagination } from "./storage";
 import { pool } from "./db";
+import { logger } from "./logger";
 import {
   insertUserSchema,
   insertVehicleSchema,
@@ -318,7 +319,7 @@ export async function registerRoutes(
       if (!ontologies[mode])
         return res.status(400).json({ message: "Invalid ontology" });
       const userId = req.session.userId!;
-      await storage.updateUser(userId, { mode } as any);
+      await storage.updateUser(userId, { mode });
       await storage.deleteAllModulesByUser(userId);
       const created = [];
       const seedModules =
@@ -354,7 +355,7 @@ export async function registerRoutes(
       const userId = req.session.userId!;
       const user = await storage.updateUser(userId, {
         preferences: req.body,
-      } as any);
+      });
       return res.json(user);
     },
   );
@@ -396,7 +397,8 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const mod = await storage.updateModule(id, req.body);
+      const mod = await storage.updateModule(id, req.session.userId!, req.body);
+      if (!mod) return res.status(404).json({ message: "Module not found" });
       return res.json(mod);
     },
   );
@@ -406,7 +408,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.deleteModule(id);
+      await storage.deleteModule(id, req.session.userId!);
       return res.json({ ok: true });
     },
   );
@@ -450,7 +452,7 @@ export async function registerRoutes(
     }
     if (result.switchMode) {
       const nextMode = result.switchMode as UserMode;
-      await storage.updateUser(userId, { mode: result.switchMode } as any);
+      await storage.updateUser(userId, { mode: result.switchMode });
       await storage.deleteAllModulesByUser(userId);
       const seedModules =
         defaultModulesByOntology[nextMode] || defaultModulesByOntology.rental;
@@ -533,7 +535,7 @@ export async function registerRoutes(
             result = await storage.createVehicle(vData);
             break;
           case "update-vehicle":
-            result = await storage.updateVehicle(action.id, action.payload);
+            result = await storage.updateVehicle(action.id, userId, action.payload);
             break;
           case "create-customer":
             const cData = insertCustomerSchema.parse({
@@ -594,7 +596,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.markNotificationRead(id);
+      await storage.markNotificationRead(id, req.session.userId!);
       return res.json({ ok: true });
     },
   );
@@ -640,14 +642,15 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       try {
+        const userId = req.session.userId!;
         const data = insertInspectionSchema.parse({
           ...req.body,
-          userId: req.session.userId!,
+          userId,
           status: "processing",
         });
         const inspection = await storage.createInspection(data);
-        processInspection(inspection.id, data.mediaUrls || []).catch((err) =>
-          console.error("Vision processing failed:", err),
+        processInspection(inspection.id, userId, data.mediaUrls || []).catch((err) =>
+          logger.error({ err, inspectionId: inspection.id }, "Vision processing failed"),
         );
         return res.json(inspection);
       } catch (e: any) {
@@ -683,7 +686,8 @@ export async function registerRoutes(
 
   // ── Vehicles ──
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getVehicles(req.session.userId!));
+    const pagination = parsePagination(req.query);
+    return res.json(await storage.getVehicles(req.session.userId!, pagination));
   });
   app.post(
     "/api/vehicles",
@@ -706,8 +710,10 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const v = await storage.updateVehicle(id, req.body);
-      emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, {
+      const userId = req.session.userId!;
+      const v = await storage.updateVehicle(id, userId, req.body);
+      if (!v) return res.status(404).json({ message: "Vehicle not found" });
+      emitEvent(userId, null, EventTypes.ENTITY_UPDATED, {
         entityType: "vehicle",
         entityId: id,
         data: v,
@@ -720,7 +726,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.deleteVehicle(id);
+      await storage.deleteVehicle(id, req.session.userId!);
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
         entityType: "vehicle",
         entityId: id,
@@ -734,7 +740,8 @@ export async function registerRoutes(
     "/api/customers",
     requireAuth,
     async (req: Request, res: Response) => {
-      return res.json(await storage.getCustomers(req.session.userId!));
+      const pagination = parsePagination(req.query);
+      return res.json(await storage.getCustomers(req.session.userId!, pagination));
     },
   );
   app.post(
@@ -758,8 +765,10 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const c = await storage.updateCustomer(id, req.body);
-      emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, {
+      const userId = req.session.userId!;
+      const c = await storage.updateCustomer(id, userId, req.body);
+      if (!c) return res.status(404).json({ message: "Customer not found" });
+      emitEvent(userId, null, EventTypes.ENTITY_UPDATED, {
         entityType: "customer",
         entityId: id,
         data: c,
@@ -772,7 +781,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.deleteCustomer(id);
+      await storage.deleteCustomer(id, req.session.userId!);
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
         entityType: "customer",
         entityId: id,
@@ -783,20 +792,22 @@ export async function registerRoutes(
 
   // ── Bookings ──
   app.get("/api/bookings", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getBookings(req.session.userId!));
+    const pagination = parsePagination(req.query);
+    return res.json(await storage.getBookings(req.session.userId!, pagination));
   });
   app.post(
     "/api/bookings",
     requireAuth,
     async (req: Request, res: Response) => {
+      const userId = req.session.userId!;
       const b = await storage.createBooking({
         ...req.body,
-        userId: req.session.userId!,
+        userId,
         startDate: toDateOrNull(req.body.startDate),
         endDate: toDateOrNull(req.body.endDate),
       });
       if (req.body.vehicleId) {
-        await storage.updateVehicle(req.body.vehicleId, { status: "rented" });
+        await storage.updateVehicle(req.body.vehicleId, userId, { status: "rented" });
       }
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {
         entityType: "booking",
@@ -811,7 +822,8 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const existing = await storage.getBooking(id);
+      const userId = req.session.userId!;
+      const existing = await storage.getBooking(id, userId);
       if (!existing) {
         return res.status(404).json({ message: "Booking not found" });
       }
@@ -826,17 +838,17 @@ export async function registerRoutes(
           : {}),
       };
 
-      const booking = await storage.updateBooking(id, updates);
+      const booking = await storage.updateBooking(id, userId, updates);
       const bookingVehicleId = booking?.vehicleId ?? existing.vehicleId;
       const bookingStatus = booking?.status ?? existing.status;
 
       if (bookingVehicleId) {
         if (bookingStatus === "completed" || bookingStatus === "cancelled") {
-          await storage.updateVehicle(bookingVehicleId, {
+          await storage.updateVehicle(bookingVehicleId, userId, {
             status: "available",
           });
         } else if (bookingStatus === "active") {
-          await storage.updateVehicle(bookingVehicleId, {
+          await storage.updateVehicle(bookingVehicleId, userId, {
             status: "rented",
           });
         }
@@ -853,7 +865,8 @@ export async function registerRoutes(
 
   // ── Tasks ──
   app.get("/api/tasks", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getTasks(req.session.userId!));
+    const pagination = parsePagination(req.query);
+    return res.json(await storage.getTasks(req.session.userId!, pagination));
   });
   app.post("/api/tasks", requireAuth, async (req: Request, res: Response) => {
     const t = await storage.createTask({
@@ -873,7 +886,8 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const task = await storage.updateTask(id, {
+      const userId = req.session.userId!;
+      const task = await storage.updateTask(id, userId, {
         ...req.body,
         ...(req.body.dueDate !== undefined
           ? { dueDate: toDateOrNull(req.body.dueDate) }
@@ -884,7 +898,7 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Task not found" });
       }
 
-      emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, {
+      emitEvent(userId, null, EventTypes.ENTITY_UPDATED, {
         entityType: "task",
         entityId: id,
         data: task,
@@ -897,7 +911,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.deleteTask(id);
+      await storage.deleteTask(id, req.session.userId!);
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
         entityType: "task",
         entityId: id,
@@ -908,7 +922,8 @@ export async function registerRoutes(
 
   // ── Notes ──
   app.get("/api/notes", requireAuth, async (req: Request, res: Response) => {
-    return res.json(await storage.getNotes(req.session.userId!));
+    const pagination = parsePagination(req.query);
+    return res.json(await storage.getNotes(req.session.userId!, pagination));
   });
   app.post("/api/notes", requireAuth, async (req: Request, res: Response) => {
     const note = await storage.createNote({
@@ -927,13 +942,14 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      const note = await storage.updateNote(id, req.body);
+      const userId = req.session.userId!;
+      const note = await storage.updateNote(id, userId, req.body);
 
       if (!note) {
         return res.status(404).json({ message: "Note not found" });
       }
 
-      emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, {
+      emitEvent(userId, null, EventTypes.ENTITY_UPDATED, {
         entityType: "note",
         entityId: id,
         data: note,
@@ -946,7 +962,7 @@ export async function registerRoutes(
     requireAuth,
     async (req: Request, res: Response) => {
       const id = getRouteParam(req, "id");
-      await storage.deleteNote(id);
+      await storage.deleteNote(id, req.session.userId!);
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
         entityType: "note",
         entityId: id,

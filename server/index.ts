@@ -1,9 +1,13 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { checkDatabaseConnection, closeDatabasePool } from "./db";
 import { env, isProduction } from "./config";
+import { logger } from "./logger";
 
 const app = express();
 const httpServer = createServer(app);
@@ -54,15 +58,62 @@ app.use((req, res, next) => {
   return next();
 });
 
+// ── Security headers (CSP, HSTS, etc.) ──
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=()",
+  );
+  if (isProduction) {
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: https:",
+        "connect-src 'self' https://api.openai.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "frame-ancestors 'none'",
+      ].join("; "),
+    );
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains",
+    );
+  }
+  next();
+});
+
+// ── Compression ──
+app.use(compression());
+
+// ── Global API rate limiting ──
+app.use(
+  "/api/",
+  rateLimit({
+    windowMs: 60_000,
+    max: env.NODE_ENV === "test" ? 10_000 : 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many requests, please try again later." },
+  }),
+);
+
+// ── Body parsing with size limits ──
 app.use(
   express.json({
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
 app.get("/health", async (_req, res) => {
   const dbStatus = await checkDatabaseConnection();
@@ -81,24 +132,28 @@ app.get("/health", async (_req, res) => {
 });
 
 export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
+  logger.info({ source }, message);
 }
 
+// ── Request ID + structured logging ──
 app.use((req, res, next) => {
+  const reqId = randomUUID();
+  res.setHeader("X-Request-Id", reqId);
+  (req as any).reqId = reqId;
+
   const start = Date.now();
   const path = req.path;
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
+      logger.info({
+        reqId,
+        method: req.method,
+        path,
+        status: res.statusCode,
+        durationMs: duration,
+      }, `${req.method} ${path} ${res.statusCode}`);
     }
   });
 
@@ -106,17 +161,17 @@ app.use((req, res, next) => {
 });
 
 async function shutdown(signal: string) {
-  log(`received ${signal}, closing server`, "shutdown");
+  logger.info({ signal }, "received signal, closing server");
 
   httpServer.close(async (serverError) => {
     if (serverError) {
-      console.error("[shutdown] HTTP server close failed:", serverError);
+      logger.error({ err: serverError }, "HTTP server close failed");
     }
 
     try {
       await closeDatabasePool();
     } catch (dbError) {
-      console.error("[shutdown] database pool close failed:", dbError);
+      logger.error({ err: dbError }, "database pool close failed");
     } finally {
       process.exit(serverError ? 1 : 0);
     }
@@ -153,7 +208,7 @@ async function startServer() {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    console.error("Internal Server Error:", err);
+    logger.error({ err, reqId: ((_req as any).reqId) }, "Internal Server Error");
 
     if (res.headersSent) {
       return next(err);
@@ -180,16 +235,16 @@ async function startServer() {
     );
   });
 
-  log(`serving on ${env.HOST}:${env.PORT} (${env.NODE_ENV})`);
+  logger.info({ host: env.HOST, port: env.PORT, env: env.NODE_ENV }, "server started");
 }
 
 startServer().catch(async (error) => {
-  console.error("[startup] failed to boot:", error);
+  logger.fatal({ err: error }, "failed to boot");
 
   try {
     await closeDatabasePool();
   } catch (dbError) {
-    console.error("[startup] failed to close database pool:", dbError);
+    logger.error({ err: dbError }, "failed to close database pool on startup failure");
   }
 
   process.exit(1);
