@@ -22,6 +22,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const {
     activeOntology,
     isAuthenticated,
+    isGuest,
     isLoading,
     user,
     preferences,
@@ -177,12 +178,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 </span>
               ) : null}
             </Button>
-            <div
-              className="h-7 w-7 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-primary text-xs font-semibold cursor-pointer"
-              data-testid="button-avatar"
-            >
-              {user?.displayName?.charAt(0) || user?.username?.charAt(0) || "U"}
-            </div>
+            {isGuest ? (
+              <a
+                href="/auth"
+                className="flex items-center gap-1.5 rounded-lg bg-primary/15 border border-primary/30 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/25 transition-colors"
+                data-testid="button-guest-sign-in"
+              >
+                Sign In
+              </a>
+            ) : (
+              <div
+                className="h-7 w-7 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-primary text-xs font-semibold cursor-pointer"
+                data-testid="button-avatar"
+              >
+                {user?.displayName?.charAt(0) || user?.username?.charAt(0) || "U"}
+              </div>
+            )}
           </div>
         </header>
 

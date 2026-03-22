@@ -66,6 +66,7 @@ export default function Sidebar() {
     stats,
     unreadNotificationsCount,
     user,
+    isGuest,
   } =
     useAppState();
   const [location, setLocation] = useLocation();
@@ -449,18 +450,31 @@ export default function Sidebar() {
 
         <div className="flex items-center justify-between px-1 pt-1">
           <span className="text-[11px] text-muted-foreground truncate max-w-[140px]">
-            {user?.displayName || user?.username}
+            {isGuest ? "Guest" : (user?.displayName || user?.username)}
           </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 hover:text-destructive"
-            onClick={() => logout()}
-            aria-label="Log out"
-            data-testid="button-logout"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-          </Button>
+          {isGuest ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-primary hover:text-primary"
+              onClick={() => { logout(); window.location.assign("/auth"); }}
+              aria-label="Sign in"
+              data-testid="button-guest-sign-in-sidebar"
+            >
+              Sign In
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 hover:text-destructive"
+              onClick={() => logout()}
+              aria-label="Log out"
+              data-testid="button-logout"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
     </>

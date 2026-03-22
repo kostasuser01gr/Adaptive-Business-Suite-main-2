@@ -43,6 +43,7 @@ function ProtectedRoute({
   const { isAuthenticated, isLoading } = useAppState();
 
   useEffect(() => {
+    // Allow both authenticated users AND guests through
     if (!isLoading && !isAuthenticated) {
       setLocation("/auth");
     }
