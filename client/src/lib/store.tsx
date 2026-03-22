@@ -20,6 +20,37 @@ import {
 
 export type UserMode = "rental" | "personal" | "professional" | "custom";
 
+/* ── Guest mode helpers ── */
+const GUEST_KEY = "nexus:guest";
+export function enterGuestMode() {
+  sessionStorage.setItem(GUEST_KEY, "1");
+}
+export function exitGuestMode() {
+  sessionStorage.removeItem(GUEST_KEY);
+}
+export function isGuestSession(): boolean {
+  try {
+    return sessionStorage.getItem(GUEST_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guard for write operations in guest mode.
+ * Returns `true` when guest → caller should abort and show sign-up prompt.
+ */
+export function requireAuth(toastFn: typeof toast): boolean {
+  if (isGuestSession()) {
+    toastFn.info("Sign in or create an account to save changes.", {
+      action: { label: "Sign In", onClick: () => window.location.assign("/auth") },
+      duration: 5000,
+    });
+    return true; // caller should abort
+  }
+  return false;
+}
+
 export interface ModuleConfig {
   id: string;
   type: string;
@@ -44,6 +75,7 @@ export interface Message {
 
 interface AppContextType {
   isAuthenticated: boolean;
+  isGuest: boolean;
   isLoading: boolean;
   user: any;
   mode: UserMode;
@@ -67,6 +99,7 @@ interface AppContextType {
     password: string,
     displayName?: string,
   ) => Promise<any>;
+  continueAsGuest: () => void;
   logout: () => Promise<void>;
   setMode: (mode: UserMode) => Promise<void>;
   updatePreferences: (patch: AppPreferencesPatch) => Promise<AppPreferences>;
@@ -102,7 +135,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     retry: false,
     staleTime: Infinity,
   });
-  const isAuthenticated = !!userData && !userLoading;
+  const isRealAuth = !!userData && !userLoading;
+  const isGuest = !isRealAuth && isGuestSession();
+  const isAuthenticated = isRealAuth || isGuest;
   const user = userData || null;
   const mode = (user?.mode as UserMode) || "rental";
   const preferences = useMemo(
@@ -224,8 +259,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     qc.invalidateQueries();
     return user;
   };
+  const continueAsGuest = () => {
+    enterGuestMode();
+    toast.success("Exploring as guest — sign in anytime to save your work.");
+  };
+
   const logout = async () => {
-    await api.auth.logout();
+    exitGuestMode();
+    if (isRealAuth) {
+      await api.auth.logout();
+    }
     await qc.cancelQueries();
     qc.setQueryData(["/api/auth/me"], null);
     qc.removeQueries({
@@ -380,6 +423,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         isAuthenticated,
+        isGuest,
         isLoading: userLoading,
         user,
         mode,
@@ -399,6 +443,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         currentGenerativeUI,
         login,
         register,
+        continueAsGuest,
         logout,
         setMode,
         updatePreferences,

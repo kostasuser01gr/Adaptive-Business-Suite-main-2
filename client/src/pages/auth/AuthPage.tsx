@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useAppState } from "@/lib/store";
-import { Sparkles, ArrowRight, Loader2 } from "lucide-react";
+import { Sparkles, ArrowRight, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { resolvePostAuthRoute } from "@/lib/preferences";
 
 export default function AuthPage() {
   const [, setLocation] = useLocation();
-  const { login, register, isAuthenticated, preferences } = useAppState();
+  const { login, register, continueAsGuest, isAuthenticated, preferences } = useAppState();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -160,6 +160,32 @@ export default function AuthPage() {
             )}
           </Button>
         </form>
+
+        <div className="relative my-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-white/10" />
+          </div>
+          <div className="relative flex justify-center text-xs">
+            <span className="bg-background px-3 text-muted-foreground">or</span>
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            continueAsGuest();
+            setLocation("/");
+          }}
+          className="w-full py-5 border-white/10 hover:bg-white/5 text-muted-foreground hover:text-foreground font-medium rounded-xl transition-all group"
+          data-testid="button-guest"
+        >
+          <Eye className="mr-2 h-4 w-4 opacity-60 group-hover:opacity-100 transition-opacity" />
+          Explore as Guest
+        </Button>
+        <p className="text-center text-[11px] text-muted-foreground/60 mt-3">
+          Browse the platform freely — sign in anytime to save your work.
+        </p>
       </div>
     </div>
   );
