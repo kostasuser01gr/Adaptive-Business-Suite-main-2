@@ -19,6 +19,7 @@ import {
   insertAutomationSchema,
   insertInspectionSchema,
   insertModuleSchema,
+  insertMaintenanceSchema,
 } from "@shared/schema";
 import MemoryStore from "memorystore";
 import { buildNexusUltraPayload } from "./nexus-ultra";
@@ -1020,6 +1021,70 @@ export async function registerRoutes(
       await storage.deleteNote(id, req.session.userId!);
       emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
         entityType: "note",
+        entityId: id,
+      });
+      return res.json({ ok: true });
+    },
+  );
+
+  // ── Maintenance ──
+  app.get(
+    "/api/maintenance",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const pagination = parsePagination(req.query as Record<string, unknown>);
+      return res.json(
+        await storage.getMaintenanceRecords(req.session.userId!, pagination),
+      );
+    },
+  );
+  app.post(
+    "/api/maintenance",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const parsed = insertMaintenanceSchema.safeParse({
+        ...req.body,
+        userId: req.session.userId!,
+      });
+      if (!parsed.success)
+        return res
+          .status(400)
+          .json({ message: parsed.error.issues[0]?.message ?? "Invalid input" });
+      const m = await storage.createMaintenance(parsed.data);
+      emitEvent(req.session.userId!, null, EventTypes.ENTITY_CREATED, {
+        entityType: "maintenance",
+        entityId: m.id,
+        data: m,
+      });
+      return res.json(m);
+    },
+  );
+  app.patch(
+    "/api/maintenance/:id",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const id = getRouteParam(req, "id");
+      const m = await storage.updateMaintenance(id, req.session.userId!, req.body);
+      if (!m)
+        return res
+          .status(404)
+          .json({ message: "Maintenance record not found" });
+      emitEvent(req.session.userId!, null, EventTypes.ENTITY_UPDATED, {
+        entityType: "maintenance",
+        entityId: id,
+        data: m,
+      });
+      return res.json(m);
+    },
+  );
+  app.delete(
+    "/api/maintenance/:id",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      const id = getRouteParam(req, "id");
+      await storage.deleteMaintenance(id, req.session.userId!);
+      emitEvent(req.session.userId!, null, EventTypes.ENTITY_DELETED, {
+        entityType: "maintenance",
         entityId: id,
       });
       return res.json({ ok: true });

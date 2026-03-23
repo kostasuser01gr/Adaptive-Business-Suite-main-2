@@ -147,6 +147,7 @@ export interface IStorage {
   ): Promise<MaintenanceRecord | undefined>;
   deleteMaintenance(id: string, userId: string): Promise<void>;
 
+  getTask(id: string, userId: string): Promise<Task | undefined>;
   getTasks(userId: string, pagination?: PaginationParams): Promise<Task[]>;
   createTask(t: InsertTask): Promise<Task>;
   updateTask(
@@ -156,6 +157,7 @@ export interface IStorage {
   ): Promise<Task | undefined>;
   deleteTask(id: string, userId: string): Promise<void>;
 
+  getNote(id: string, userId: string): Promise<Note | undefined>;
   getNotes(userId: string, pagination?: PaginationParams): Promise<Note[]>;
   createNote(n: InsertNote): Promise<Note>;
   updateNote(
@@ -429,6 +431,13 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
+  async getTask(id: string, userId: string) {
+    const [t] = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+    return t;
+  }
   async getTasks(userId: string, pagination?: PaginationParams) {
     let query = db
       .select()
@@ -456,6 +465,13 @@ export class DatabaseStorage implements IStorage {
     await db.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
   }
 
+  async getNote(id: string, userId: string) {
+    const [n] = await db
+      .select()
+      .from(notes)
+      .where(and(eq(notes.id, id), eq(notes.userId, userId)));
+    return n;
+  }
   async getNotes(userId: string, pagination?: PaginationParams) {
     let query = db
       .select()

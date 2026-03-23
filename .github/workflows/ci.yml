@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - "codex/**"
+      - "claude/**"
       - "hotfix/**"
   pull_request:
 
