@@ -120,7 +120,7 @@
     "autoprefixer": "^10.4.21",
     "c8": "^11.0.0",
     "drizzle-kit": "^0.31.10",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.26.0",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "postcss": "^8.5.6",
