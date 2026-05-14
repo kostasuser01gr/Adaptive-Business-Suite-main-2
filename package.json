@@ -119,8 +119,8 @@
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "c8": "^11.0.0",
-    "drizzle-kit": "^0.31.10",
-    "esbuild": "^0.26.0",
+    "drizzle-kit": "^0.31.0",
+    "esbuild": "^0.25.5",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "postcss": "^8.5.6",
@@ -132,5 +132,9 @@
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
+  },
+  "overrides": {
+    "yaml": ">=2.8.3",
+    "fast-xml-parser": ">=5.7.0"
   }
 }
